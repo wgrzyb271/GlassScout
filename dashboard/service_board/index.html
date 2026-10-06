@@ -19,6 +19,8 @@
     .card::before,.folder::before { position:absolute; top:-52px; right:-42px; width:180px; height:140px; content:""; border-radius:50%; background:radial-gradient(circle,rgba(var(--tone-rgb),.3),transparent 68%); }
     .slot:hover>.card,.slot:hover>.folder,.group-service:hover { transform:translateY(-3px); border-color:rgba(255,255,255,.36); }
     .dragging { opacity:.42; transform:none!important; pointer-events:none; }
+    .drag-ghost { position:fixed!important; z-index:9999!important; margin:0!important; opacity:.96!important; pointer-events:none!important; transform:translateY(-10px) scale(1.025) rotate(.35deg)!important; transform-origin:center; box-shadow:0 38px 82px rgba(0,0,0,.52),0 0 42px rgba(var(--tone-rgb),.24),inset 0 1px rgba(255,255,255,.3)!important; transition:none!important; }
+    body.is-dragging,body.is-dragging * { cursor:grabbing!important; }
     .drop-target { border-color:var(--tone)!important; box-shadow:0 0 0 2px rgba(var(--tone-rgb),.42),0 25px 56px rgba(0,0,0,.31)!important; }
     .reorder-before { box-shadow:inset 0 5px #7dd3fc,0 25px 56px rgba(0,0,0,.31)!important; }
     .reorder-after { box-shadow:inset 0 -5px #7dd3fc,0 25px 56px rgba(0,0,0,.31)!important; }
@@ -153,6 +155,19 @@
       else if(role==='service')groupOnService(payload,target.dataset.serviceId);
       else if(role==='folder')addToGroup(payload,target.dataset.groupId);
     }
+    function createDragGhost(state,event) {
+      if(event.pointerType!=='mouse')return;
+      const rect=state.el.getBoundingClientRect(),ghost=state.el.cloneNode(true);
+      ghost.classList.remove('dragging','drop-target','reorder-before','reorder-after','reorder-horizontal'); ghost.classList.add('drag-ghost');
+      ghost.removeAttribute('data-drop-role'); ghost.querySelectorAll('[id]').forEach(node=>node.removeAttribute('id'));
+      Object.assign(ghost.style,{width:`${rect.width}px`,height:`${rect.height}px`,left:`${rect.left}px`,top:`${rect.top}px`});
+      state.offsetX=state.startX-rect.left; state.offsetY=state.startY-rect.top; state.ghost=ghost; document.body.append(ghost); document.body.classList.add('is-dragging');
+    }
+    function moveDragGhost(state,event) {
+      if(!state.ghost)return;
+      state.ghost.style.left=`${event.clientX-state.offsetX}px`; state.ghost.style.top=`${event.clientY-state.offsetY}px`;
+    }
+    function removeDragGhost(state) { state?.ghost?.remove(); document.body.classList.remove('is-dragging'); }
     function enablePointerDrag(el,payload) {
       el.addEventListener('pointerdown',event=>{
         if(event.button!==0||event.target.closest('a,button,input,textarea,select'))return;
@@ -164,17 +179,17 @@
         if(!touchDrag.active) {
           if(Math.hypot(dx,dy)<10)return;
           if(event.pointerType!=='mouse'&&!touchDrag.forceDrag&&Math.abs(dy)>Math.abs(dx)*1.2){touchDrag=null;return;}
-          touchDrag.active=true; drag=payload; moved=true; el.classList.add('dragging'); el.setPointerCapture?.(event.pointerId);
+          touchDrag.active=true; drag=payload; moved=true; el.classList.add('dragging'); createDragGhost(touchDrag,event); el.setPointerCapture?.(event.pointerId);
         }
-        event.preventDefault(); markTouchTarget(touchTargetAt(event.clientX,event.clientY),event.clientX,event.clientY);
+        event.preventDefault(); moveDragGhost(touchDrag,event); markTouchTarget(touchTargetAt(event.clientX,event.clientY),event.clientX,event.clientY);
       });
       const finish=event=>{
         if(!touchDrag||touchDrag.el!==el||touchDrag.pointerId!==event.pointerId)return;
-        const active=touchDrag.active,payloadValue=touchDrag.payload;
-        if(active){event.preventDefault();const target=touchTargetAt(event.clientX,event.clientY);clearDropStyles();finishTouchDrop(payloadValue,target,event.clientX,event.clientY);}
+        const state=touchDrag,active=state.active,payloadValue=state.payload;
+        if(active){event.preventDefault();const target=touchTargetAt(event.clientX,event.clientY);clearDropStyles();removeDragGhost(state);finishTouchDrop(payloadValue,target,event.clientX,event.clientY);}
         el.classList.remove('dragging'); drag=null; touchDrag=null; setTimeout(()=>moved=false,active?300:0);
       };
-      el.addEventListener('pointerup',finish); el.addEventListener('pointercancel',event=>{if(touchDrag?.el===el){el.classList.remove('dragging');clearDropStyles();drag=null;touchDrag=null;moved=false;}});
+      el.addEventListener('pointerup',finish); el.addEventListener('pointercancel',event=>{if(touchDrag?.el===el){removeDragGhost(touchDrag);el.classList.remove('dragging');clearDropStyles();drag=null;touchDrag=null;moved=false;}});
     }
     function setDrag(el, payload) {
       el.draggable=false;
