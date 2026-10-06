@@ -4,9 +4,25 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_FILE = ROOT_DIR / "data" / "services.json"
+LAYOUT_FILE = ROOT_DIR / "data" / "layout.json"
 BACKGROUND_IMAGE = ROOT_DIR / "assets" / "GoldenGate_Day_optimized.jpg"
 STYLE_FILE = Path(__file__).with_name("styles") / "dashboard.css"
 TONES = ("amber", "violet", "blue", "mint")
+ICONS = {
+    "◈": "Generic",
+    "◌": "Network",
+    "◇": "Server",
+    "⊞": "Desktop",
+    "◒": "Security",
+    "▦": "Dashboard",
+    "◉": "Monitoring",
+    "⌂": "Home",
+    "⚙": "Settings",
+    "☁": "Cloud",
+    "⬡": "Container",
+    "◆": "Storage",
+}
+CUSTOM_ICON = "__custom__"
 
 DEFAULT_SERVICES = [
     {

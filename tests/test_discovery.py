@@ -503,6 +503,17 @@ class StorageTests(unittest.TestCase):
                 Store(root).save_finding(self.finding())
             self.assertEqual((root / "services.json").read_text(), "broken")
 
+    def test_clear_history_preserves_services(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = Store(root)
+            store.save_finding(self.finding())
+            store.event("probe", "A diagnostic event")
+            services_before = (root / "services.json").read_text(encoding="utf-8")
+            store.clear_history()
+            self.assertEqual(store.read(), {"findings": {}, "run": None, "events": []})
+            self.assertEqual((root / "services.json").read_text(encoding="utf-8"), services_before)
+
     def test_background_end_to_end(self):
         with TemporaryDirectory() as directory, fixture() as url:
             job = JobManager(Path(directory))

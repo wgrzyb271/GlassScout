@@ -7,6 +7,9 @@ from html import escape
 
 import streamlit as st
 
+from dashboard.layout import load_layout, save_layout
+from dashboard.service_board import service_board
+
 
 def _status_badge(state: bool | None) -> str:
     if state is None:
@@ -51,10 +54,15 @@ def render_header(now: datetime, *, daytime: bool) -> None:
 
 
 def render_service_grid(services: list[dict[str, str | bool | None]]) -> None:
-    cards = "".join(_service_card(service) for service in services)
-    if not cards:
-        cards = '<div class="empty-state">No services yet. Add the first one from the sidebar.</div>'
-    st.markdown(f'<main class="dashboard-grid">{cards}</main>', unsafe_allow_html=True)
+    service_ids = [str(service["id"]) for service in services]
+    layout = load_layout(service_ids)
+    event = service_board(services, layout)
+    if isinstance(event, dict) and event.get("type") == "layout" and isinstance(event.get("layout"), dict):
+        nonce = str(event.get("nonce", ""))
+        if nonce and nonce != st.session_state.get("service_board_event"):
+            st.session_state["service_board_event"] = nonce
+            save_layout(event["layout"], service_ids)
+            st.rerun()
     st.markdown(
         '<div class="footerline"><span>◈ LOCAL INFRASTRUCTURE</span>'
         '<span>LIQUID GLASS / v2.0</span></div>',

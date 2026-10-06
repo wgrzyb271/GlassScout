@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root { font-family: Manrope,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:transparent!important; }
+    * { box-sizing: border-box; }
+    html,body { margin:0; padding:0; overflow:hidden; background:rgba(0,0,0,0)!important; color:#f5f7fb; }
+    button,input { font:inherit; }
+    #board { display:grid; width:100%; max-width:100%; grid-template-columns:repeat(4,minmax(0,1fr)); gap:18px; padding:8px 2px 28px; overflow:hidden; }
+    .slot { position:relative; min-width:0; }
+    .slot>.card,.slot>.folder { height:100%; }
+    .drop-zone { position:absolute; z-index:5; top:-8px; right:0; left:0; height:16px; border-radius:99px; transition:.16s; }
+    .drop-zone.active { background:rgba(255,255,255,.34); box-shadow:0 0 18px rgba(125,211,252,.35); }
+    .drop-zone.end-zone { position:relative; grid-column:1/-1; top:auto; height:18px; }
+    .card,.folder { --tone:#60a5fa; --tone-rgb:96,165,250; position:relative; min-height:355px; overflow:hidden; overflow-wrap:anywhere; padding:23px; border:1px solid rgba(255,255,255,.18); border-radius:22px; background:linear-gradient(125deg,rgba(255,255,255,.13),rgba(255,255,255,.025) 45%,rgba(255,255,255,.055)); box-shadow:0 25px 56px rgba(0,0,0,.31),inset 0 1px rgba(255,255,255,.22); backdrop-filter:blur(22px) saturate(150%); transition:transform .22s ease,border-color .22s ease,opacity .2s; touch-action:pan-y; }
+    .amber { --tone:#f6b94a; --tone-rgb:246,185,74; } .violet { --tone:#a78bfa; --tone-rgb:167,139,250; } .blue { --tone:#60a5fa; --tone-rgb:96,165,250; } .mint { --tone:#5eead4; --tone-rgb:94,234,212; }
+    .card::before,.folder::before { position:absolute; top:-52px; right:-42px; width:180px; height:140px; content:""; border-radius:50%; background:radial-gradient(circle,rgba(var(--tone-rgb),.3),transparent 68%); }
+    .slot:hover>.card,.slot:hover>.folder,.group-service:hover { transform:translateY(-3px); border-color:rgba(255,255,255,.36); }
+    .dragging { opacity:.42; transform:none!important; pointer-events:none; }
+    .drop-target { border-color:var(--tone)!important; box-shadow:0 0 0 2px rgba(var(--tone-rgb),.42),0 25px 56px rgba(0,0,0,.31)!important; }
+    .reorder-before { box-shadow:inset 0 5px #7dd3fc,0 25px 56px rgba(0,0,0,.31)!important; }
+    .reorder-after { box-shadow:inset 0 -5px #7dd3fc,0 25px 56px rgba(0,0,0,.31)!important; }
+    .reorder-horizontal.reorder-before { box-shadow:inset 5px 0 #7dd3fc,0 25px 56px rgba(0,0,0,.31)!important; }
+    .reorder-horizontal.reorder-after { box-shadow:inset -5px 0 #7dd3fc,0 25px 56px rgba(0,0,0,.31)!important; }
+    .top { position:relative; display:flex; align-items:center; justify-content:space-between; }
+    .icon { display:grid; width:40px; height:40px; place-items:center; color:var(--tone); border:1px solid rgba(255,255,255,.18); border-radius:13px; background:rgba(255,255,255,.08); font-size:24px; cursor:grab; touch-action:none; }
+    .status { display:inline-flex; align-items:center; gap:6px; padding:6px 9px; border:1px solid rgba(255,255,255,.13); border-radius:999px; background:rgba(8,16,27,.32); font:500 10px monospace; letter-spacing:.08em; }
+    .dot { width:6px; height:6px; border-radius:50%; background:var(--tone); box-shadow:0 0 10px var(--tone); }
+    .online .dot { background:#65e7ad; box-shadow:0 0 10px #65e7ad; } .offline .dot { background:#fb7185; box-shadow:0 0 10px #fb7185; }
+    h2 { position:relative; margin:30px 0 4px; font-size:20px; letter-spacing:-.04em; }
+    .kind { position:relative; color:var(--tone); font:500 10px monospace; letter-spacing:.13em; }
+    .description { position:relative; min-height:66px; margin:20px 0; color:rgba(226,232,240,.68); font-size:13px; line-height:1.6; }
+    .endpoint { position:relative; overflow-wrap:anywhere; padding-top:14px; border-top:1px solid rgba(255,255,255,.12); color:rgba(255,255,255,.65); font:10px/1.35 monospace; }
+    .open { position:absolute; right:23px; bottom:22px; left:23px; z-index:6; display:flex; justify-content:space-between; padding:12px 14px; color:white; border:1px solid rgba(255,255,255,.22); border-radius:11px; background:rgba(255,255,255,.1); font-size:12px; font-weight:700; text-decoration:none; touch-action:manipulation; }
+    .open span { color:var(--tone); }
+    .folder { cursor:pointer; display:flex; min-height:355px; flex-direction:column; justify-content:center; background:linear-gradient(135deg,rgba(255,255,255,.17),rgba(255,255,255,.035) 48%,rgba(167,139,250,.09)); backdrop-filter:blur(28px) saturate(175%); }
+    .folder-grid { position:relative; display:grid; width:218px; min-height:158px; margin:0 auto; padding:15px; grid-template-columns:repeat(2,minmax(0,1fr)); gap:11px; border:1px solid rgba(255,255,255,.26); border-radius:31px; background:linear-gradient(145deg,rgba(255,255,255,.16),rgba(255,255,255,.045)); box-shadow:inset 0 1px rgba(255,255,255,.3),0 18px 38px rgba(0,0,0,.22); backdrop-filter:blur(20px) saturate(180%); cursor:grab; touch-action:none; }
+    .folder-entry { display:grid; min-width:0; justify-items:center; gap:5px; }
+    .folder-icon { display:grid; width:58px; height:58px; place-items:center; border:1px solid rgba(255,255,255,.16); border-radius:15px; background:rgba(255,255,255,.1); color:var(--tone); box-shadow:inset 0 1px rgba(255,255,255,.18),0 0 20px rgba(var(--tone-rgb),.15); font-size:25px; }
+    .folder-label { width:100%; color:rgba(255,255,255,.78); font:500 9px/1.2 monospace; overflow-wrap:anywhere; text-align:center; }
+    .folder h2 { margin:19px 0 4px; text-align:center; }
+    .count { color:rgba(255,255,255,.58); text-align:center; font-size:12px; }
+    .hint { grid-column:1/-1; margin:4px 0 1px; color:rgba(255,255,255,.48); font:10px monospace; letter-spacing:.08em; text-align:center; }
+    .empty { grid-column:1/-1; padding:56px; border:1px dashed rgba(255,255,255,.22); border-radius:22px; color:rgba(255,255,255,.65); text-align:center; }
+    .overlay { position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:20px; background:rgba(5,12,22,.12); backdrop-filter:blur(6px) saturate(115%); }
+    .folder-panel { width:min(1100px,100%); max-height:700px; overflow:auto; padding:24px; border:1px solid rgba(255,255,255,.24); border-radius:27px; background:linear-gradient(145deg,rgba(255,255,255,.18),rgba(18,27,42,.58) 48%,rgba(255,255,255,.075)); box-shadow:inset 0 1px rgba(255,255,255,.28),0 34px 90px rgba(0,0,0,.35); backdrop-filter:blur(30px) saturate(170%); }
+    .folder-head { display:flex; align-items:center; gap:12px; }
+    .folder-name { min-width:0; flex:1; padding:10px 12px; color:#fff; border:1px solid rgba(255,255,255,.16); border-radius:10px; outline:none; background:rgba(255,255,255,.07); font-size:20px; font-weight:750; }
+    .close { flex:0 0 auto; padding:10px 14px; color:white; border:1px solid rgba(255,255,255,.18); border-radius:10px; background:rgba(255,255,255,.08); cursor:pointer; }
+    .extract { margin:18px 0; padding:13px; border:1px dashed rgba(255,255,255,.28); border-radius:13px; color:rgba(255,255,255,.62); text-align:center; }
+    .extract.active { color:white; border-color:#7dd3fc; background:rgba(125,211,252,.12); }
+    .group-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:16px; }
+    .group-service { min-height:355px; cursor:grab; }
+    @media(max-width:1499px){ #board{grid-template-columns:repeat(3,minmax(0,1fr))} }
+    @media(max-width:1049px){ #board{grid-template-columns:repeat(2,minmax(0,1fr))} }
+    @media(max-width:699px){
+      body.folder-open #board { display:none; }
+      #board { grid-template-columns:1fr; }
+      .card,.folder { min-height:330px; }
+      .overlay { position:relative; inset:auto; display:block; min-height:0; padding:6px 2px 18px; background:transparent; backdrop-filter:none; }
+      .folder-panel { width:100%; max-height:none; overflow:visible; padding:14px; border-radius:22px; }
+      .folder-head { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; }
+      .folder-name { font-size:17px; }
+      .close { padding:9px 11px; }
+      .extract { margin:14px 0; padding:11px 8px; font-size:13px; line-height:1.35; }
+      .group-grid { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div id="board"></div>
+  <script>
+    const board = document.getElementById('board');
+    let services = [], layout = {version:1,items:[]}, drag = null, openGroupId = null, moved = false;
+    let touchDrag = null, lastRenderSignature = null;
+    const send = (type, extra={}) => window.parent.postMessage({isStreamlitMessage:true,type,...extra}, '*');
+    const ready = () => send('streamlit:componentReady',{apiVersion:1});
+    const height = () => requestAnimationFrame(() => {
+      const mobile = window.innerWidth < 700;
+      const requested = openGroupId && !mobile ? 780 : Math.max(120, document.documentElement.scrollHeight + 2);
+      send('streamlit:setFrameHeight',{height:requested});
+    });
+    const value = () => send('streamlit:setComponentValue',{value:{type:'layout',layout,nonce:`${Date.now()}-${Math.random()}`},dataType:'json'});
+    const byId = id => services.find(service => service.id === id);
+    const escapeText = value => String(value ?? '');
+    const status = service => service.online === true ? ['online','ONLINE'] : service.online === false ? ['offline','UNREACHABLE'] : ['ready','LINK READY'];
+    const findGroup = id => layout.items.find(item => item.type === 'group' && item.id === id);
+
+    function cleanupGroups() {
+      const next=[];
+      for (const item of layout.items) {
+        if (item.type !== 'group' || item.service_ids.length >= 2) next.push(item);
+        else if (item.service_ids.length === 1) next.push({type:'service',id:item.service_ids[0]});
+      }
+      layout.items=next;
+      if (openGroupId && !findGroup(openGroupId)) openGroupId=null;
+    }
+    function takeService(id) {
+      let previousGroup=null;
+      layout.items = layout.items.filter(item => {
+        if (item.type === 'service') return item.id !== id;
+        const before=item.service_ids.length;
+        item.service_ids=item.service_ids.filter(member => member !== id);
+        if (item.service_ids.length !== before) previousGroup=item.id;
+        return true;
+      });
+      cleanupGroups();
+      return previousGroup;
+    }
+    function topIndexFor(id) { return layout.items.findIndex(item => item.id === id); }
+    function commit() { cleanupGroups(); render(); value(); }
+
+    function make(tag, className, text) {
+      const el=document.createElement(tag); if(className) el.className=className; if(text!==undefined) el.textContent=escapeText(text); return el;
+    }
+    function clearDropStyles() {
+      document.querySelectorAll('.active,.drop-target,.reorder-before,.reorder-after,.reorder-horizontal').forEach(node=>node.classList.remove('active','drop-target','reorder-before','reorder-after','reorder-horizontal'));
+    }
+    function horizontalBoard() { return getComputedStyle(board).gridTemplateColumns.split(' ').length>1; }
+    function dropIntent(el,x,y,horizontal=false) {
+      const rect=el.getBoundingClientRect();
+      const ratio=horizontal?(x-rect.left)/Math.max(1,rect.width):(y-rect.top)/Math.max(1,rect.height);
+      return ratio<.28?'before':ratio>.72?'after':'center';
+    }
+    function touchTargetAt(x,y) { return document.elementsFromPoint(x,y).find(node=>node.dataset?.dropRole); }
+    function markTouchTarget(target,x,y) {
+      clearDropStyles(); if(!target)return;
+      const role=target.dataset.dropRole;
+      if(role==='extract'||role==='reorder') { target.classList.add('active'); return; }
+      const horizontal=role==='service'||role==='folder'?horizontalBoard():false;
+      const where=dropIntent(target,x,y,horizontal);
+      if(horizontal&&where!=='center')target.classList.add('reorder-horizontal');
+      target.classList.add(where==='center'?'drop-target':`reorder-${where}`);
+    }
+    function removeFromGroup(payload,groupId) {
+      if(payload.kind!=='group-service'||payload.groupId!==groupId)return;
+      takeService(payload.id); layout.items.push({type:'service',id:payload.id}); commit();
+    }
+    function finishTouchDrop(payload,target,x,y) {
+      if(!target)return;
+      const role=target.dataset.dropRole;
+      if(role==='reorder') { moveToIndex(payload,Number(target.dataset.index)); return; }
+      if(role==='extract') { removeFromGroup(payload,target.dataset.groupId); return; }
+      if(role==='group-service') {
+        const where=dropIntent(target,x,y,false);
+        moveInsideGroup(payload,target.dataset.groupId,target.dataset.serviceId,where!=='before'); return;
+      }
+      const index=Number(target.dataset.index), where=dropIntent(target,x,y,horizontalBoard());
+      if(where==='before')moveToIndex(payload,index);
+      else if(where==='after')moveToIndex(payload,index+1);
+      else if(role==='service')groupOnService(payload,target.dataset.serviceId);
+      else if(role==='folder')addToGroup(payload,target.dataset.groupId);
+    }
+    function enablePointerDrag(el,payload) {
+      el.addEventListener('pointerdown',event=>{
+        if(event.button!==0||event.target.closest('a,button,input,textarea,select'))return;
+        touchDrag={el,payload,pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,active:false,forceDrag:Boolean(event.target.closest('.icon,.folder-grid'))};
+      });
+      el.addEventListener('pointermove',event=>{
+        if(!touchDrag||touchDrag.el!==el||touchDrag.pointerId!==event.pointerId)return;
+        const dx=event.clientX-touchDrag.startX,dy=event.clientY-touchDrag.startY;
+        if(!touchDrag.active) {
+          if(Math.hypot(dx,dy)<10)return;
+          if(event.pointerType!=='mouse'&&!touchDrag.forceDrag&&Math.abs(dy)>Math.abs(dx)*1.2){touchDrag=null;return;}
+          touchDrag.active=true; drag=payload; moved=true; el.classList.add('dragging'); el.setPointerCapture?.(event.pointerId);
+        }
+        event.preventDefault(); markTouchTarget(touchTargetAt(event.clientX,event.clientY),event.clientX,event.clientY);
+      });
+      const finish=event=>{
+        if(!touchDrag||touchDrag.el!==el||touchDrag.pointerId!==event.pointerId)return;
+        const active=touchDrag.active,payloadValue=touchDrag.payload;
+        if(active){event.preventDefault();const target=touchTargetAt(event.clientX,event.clientY);clearDropStyles();finishTouchDrop(payloadValue,target,event.clientX,event.clientY);}
+        el.classList.remove('dragging'); drag=null; touchDrag=null; setTimeout(()=>moved=false,active?300:0);
+      };
+      el.addEventListener('pointerup',finish); el.addEventListener('pointercancel',event=>{if(touchDrag?.el===el){el.classList.remove('dragging');clearDropStyles();drag=null;touchDrag=null;moved=false;}});
+    }
+    function setDrag(el, payload) {
+      el.draggable=false;
+      enablePointerDrag(el,payload);
+    }
+    function dropTarget(el, handler) {
+      el.addEventListener('dragover', event => { if(!drag)return; event.preventDefault(); event.stopPropagation(); el.classList.add(el.classList.contains('drop-zone')||el.classList.contains('extract')?'active':'drop-target'); });
+      el.addEventListener('dragleave', () => el.classList.remove('active','drop-target'));
+      el.addEventListener('drop', event => { if(!drag)return; event.preventDefault(); event.stopPropagation(); el.classList.remove('active','drop-target'); handler(drag); });
+    }
+    function positionalDrop(el, center, before, after, boardItem=false) {
+      const clear=()=>el.classList.remove('drop-target','reorder-before','reorder-after','reorder-horizontal');
+      const horizontal=()=>boardItem&&horizontalBoard();
+      const intent=event=>dropIntent(el,event.clientX,event.clientY,horizontal());
+      el.addEventListener('dragover',event=>{if(!drag)return;event.preventDefault();event.stopPropagation();clear();const where=intent(event);if(horizontal()&&where!=='center')el.classList.add('reorder-horizontal');el.classList.add(where==='center'?'drop-target':`reorder-${where}`);});
+      el.addEventListener('dragleave',clear);
+      el.addEventListener('drop',event=>{if(!drag)return;event.preventDefault();event.stopPropagation();const where=intent(event);clear();(where==='before'?before:where==='after'?after:center)(drag);});
+    }
+    function moveToIndex(payload,index) {
+      if(payload.kind==='group') {
+        const current=layout.items.find(item=>item.type==='group'&&item.id===payload.id); if(!current)return;
+        const oldIndex=layout.items.indexOf(current); layout.items=layout.items.filter(item=>item!==current); if(oldIndex<index)index-=1; layout.items.splice(Math.min(index,layout.items.length),0,current);
+      } else {
+        const oldIndex=layout.items.findIndex(item=>item.type==='service'&&item.id===payload.id); takeService(payload.id); if(oldIndex>=0&&oldIndex<index)index-=1; layout.items.splice(Math.min(index,layout.items.length),0,{type:'service',id:payload.id});
+      }
+      commit();
+    }
+    function groupOnService(payload,targetId) {
+      if(payload.kind==='group'||payload.id===targetId)return;
+      const targetIndex=layout.items.findIndex(item=>item.type==='service'&&item.id===targetId); if(targetIndex<0)return;
+      takeService(payload.id);
+      const refreshed=layout.items.findIndex(item=>item.type==='service'&&item.id===targetId); if(refreshed<0)return;
+      layout.items.splice(refreshed,1,{type:'group',id:`group-${Date.now()}-${Math.random().toString(16).slice(2)}`,name:'New group',service_ids:[targetId,payload.id]});
+      commit();
+    }
+    function addToGroup(payload,groupId) {
+      if(payload.kind==='group')return;
+      const sourceGroup=findGroup(payload.groupId); if(sourceGroup?.id===groupId)return;
+      takeService(payload.id);
+      const group=findGroup(groupId); if(!group)return;
+      group.service_ids.push(payload.id); commit();
+    }
+    function moveInsideGroup(payload,groupId,targetId,after=false) {
+      if(payload.kind!=='group-service'||payload.groupId!==groupId||payload.id===targetId)return;
+      const group=findGroup(groupId); if(!group)return;
+      group.service_ids=group.service_ids.filter(id=>id!==payload.id);
+      const target=group.service_ids.indexOf(targetId); if(target<0)return;
+      group.service_ids.splice(target+(after?1:0),0,payload.id); commit();
+    }
+
+    function fillServiceCard(card,service) {
+      const top=make('div','top'), icon=make('span','icon',service.icon||'◈'); icon.title='Drag to reorder'; const [state,label]=status(service); const badge=make('span',`status ${state}`); badge.append(make('i','dot'),document.createTextNode(label)); top.append(icon,badge);
+      card.append(top,make('h2','',service.name),make('div','kind',service.kind),make('p','description',service.description),make('div','endpoint',service.endpoint||service.url));
+      const link=make('a','open'); link.href=service.url||'#'; link.target='_blank'; link.rel='noopener noreferrer'; link.append(document.createTextNode('Open console'),make('span','', '→')); link.addEventListener('dragstart',e=>e.preventDefault()); link.addEventListener('pointerdown',e=>e.stopPropagation()); link.addEventListener('click',e=>e.stopPropagation()); card.append(link); return card;
+    }
+    function serviceCard(service,index) {
+      const card=fillServiceCard(make('article',`card ${service.tone||'blue'}`),service); card.dataset.dropRole='service';card.dataset.serviceId=service.id;card.dataset.index=index;setDrag(card,{kind:'service',id:service.id}); positionalDrop(card,p=>groupOnService(p,service.id),p=>moveToIndex(p,index),p=>moveToIndex(p,index+1),true); return card;
+    }
+    function folderCard(group,index) {
+      const folder=make('article','folder violet'); folder.dataset.dropRole='folder';folder.dataset.groupId=group.id;folder.dataset.index=index;setDrag(folder,{kind:'group',id:group.id}); positionalDrop(folder,p=>addToGroup(p,group.id),p=>moveToIndex(p,index),p=>moveToIndex(p,index+1),true);
+      const icons=make('div','folder-grid'); icons.title='Drag to reorder'; group.service_ids.slice(0,4).forEach(id=>{const service=byId(id);if(!service)return;const entry=make('span','folder-entry');entry.append(make('span',`folder-icon ${service.tone||'blue'}`,service.icon||'◈'),make('span','folder-label',service.name));icons.append(entry);});
+      folder.append(icons,make('h2','',group.name),make('div','count',`${group.service_ids.length} services`));
+      folder.addEventListener('click',()=>{if(!moved){openGroupId=group.id;render();}}); return folder;
+    }
+    function reorderZone(index, end=false) { const zone=make('div',`drop-zone${end?' end-zone':''}`); zone.dataset.dropRole='reorder';zone.dataset.index=index;dropTarget(zone,p=>moveToIndex(p,index)); return zone; }
+
+    function renderOverlay() {
+      const group=findGroup(openGroupId); if(!group)return;
+      const overlay=make('div','overlay'), panel=make('section','folder-panel'), head=make('div','folder-head');
+      const name=make('input','folder-name'); name.value=group.name; name.maxLength=40; name.setAttribute('aria-label','Group name');
+      name.addEventListener('change',()=>{group.name=name.value.trim().slice(0,40)||'Group';commit();});
+      const close=make('button','close','Close'); close.addEventListener('click',()=>{openGroupId=null;render();}); head.append(name,close); panel.append(head);
+      const extract=make('div','extract','Drag a service here to remove it from this group'); extract.dataset.dropRole='extract';extract.dataset.groupId=group.id;
+      dropTarget(extract,p=>removeFromGroup(p,group.id)); panel.append(extract);
+      const grid=make('div','group-grid');
+      group.service_ids.forEach(id=>{const service=byId(id);if(!service)return;const item=fillServiceCard(make('article',`card group-service ${service.tone||'blue'}`),service);item.dataset.dropRole='group-service';item.dataset.groupId=group.id;item.dataset.serviceId=id;setDrag(item,{kind:'group-service',id,groupId:group.id});positionalDrop(item,p=>moveInsideGroup(p,group.id,id,true),p=>moveInsideGroup(p,group.id,id,false),p=>moveInsideGroup(p,group.id,id,true));grid.append(item);});
+      panel.append(grid); overlay.append(panel); overlay.addEventListener('click',event=>{if(event.target===overlay){openGroupId=null;render();}}); document.body.append(overlay);
+    }
+    function render() {
+      board.replaceChildren(); document.querySelector('.overlay')?.remove();
+      document.body.classList.toggle('folder-open',Boolean(openGroupId));
+      if(!layout.items.length) board.append(make('div','empty','No services yet. Add the first one from the sidebar.'));
+      layout.items.forEach((item,index)=>{const slot=make('div','slot');slot.append(reorderZone(index));if(item.type==='service'){const service=byId(item.id);if(service)slot.append(serviceCard(service,index));}else slot.append(folderCard(item,index));board.append(slot);});
+      if(layout.items.length) { board.append(reorderZone(layout.items.length,true)); board.append(make('div','hint','DROP ON A CARD EDGE TO REORDER · DROP IN THE CENTER TO CREATE A GROUP')); }
+      if(openGroupId) renderOverlay(); height();
+    }
+    window.addEventListener('message', event => {
+      if(event.data?.type!=='streamlit:render')return;
+      const nextServices=Array.isArray(event.data.args.services)?event.data.args.services:[];
+      const nextLayout=event.data.args.layout&&Array.isArray(event.data.args.layout.items)?event.data.args.layout:{version:1,items:[]};
+      const signature=JSON.stringify([nextServices,nextLayout]);
+      if(signature===lastRenderSignature)return;
+      lastRenderSignature=signature; services=nextServices; layout=JSON.parse(JSON.stringify(nextLayout));
+      render();
+    });
+    ready();
+  </script>
+</body>
+</html>

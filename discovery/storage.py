@@ -31,6 +31,11 @@ class Store:
         # Fail visibly on corruption instead of discarding review history.
         return json.loads(self.state_file.read_text(encoding="utf-8"))
 
+    def clear_history(self) -> None:
+        """Clear discovery diagnostics and reviews without touching services."""
+        with data_lock(self.data_dir):
+            atomic_json(self.state_file, {"findings": {}, "run": None, "events": []})
+
     def save_run(self, run: RunRecord) -> None:
         with data_lock(self.data_dir):
             data = self.read()

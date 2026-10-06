@@ -8,6 +8,7 @@ Home Lab Command Center brings your local web interfaces together in one place. 
 
 - Open a service such as AdGuard Home, Proxmox, a Windows VM, or Kali Linux in a new browser tab.
 - Add, edit, and remove service cards from the sidebar.
+- Drag cards to reorder them, or drop one service onto another to create a named group.
 - Check whether a service's network port accepts connections.
 - See the current time without refreshing the page.
 - Use the dashboard on desktop, tablet, or phone.
@@ -90,6 +91,8 @@ Open the local address shown in the terminal, usually <http://localhost:8501>. T
 5. To edit a card, open **Manage services → Modify**, change its name, URL, category, description, icon or accent, then select **Save changes**. **Cancel** discards the edits.
 6. To remove a card, open **Manage services** and select **Remove** beside it.
 
+There is no fixed dashboard service limit. **Manage services** becomes scrollable when the list is longer than six entries. On the main multi-column grid, drag a card onto the left or right edge of another card to change its order; drop it in the center to create an iOS-style group. A one-column layout uses the top and bottom edges instead. Glass groups preview each service icon and name. Select a group to rename it, open its full service cards, or reorder them with the same drag gesture. Drag a service to the removal area above the group to place it back on the main dashboard. Card order and groups are stored locally in `data/layout.json`.
+
 Your service list is saved locally in `data/services.json` and is kept when you restart the app. Use URLs that your browser can reach, for example `http://192.168.1.20:8080` or `https://proxmox.example.local:8006`.
 
 ## 🟢 About the connection status
@@ -100,15 +103,19 @@ Turn on **Check node heartbeat** to check whether each service's host and TCP po
 
 Open **Discover services** in the sidebar to find web applications on your local network. The agent reads your computer's network settings, collects service responses, and uses Gemini or Groq to identify applications even when they use nonstandard ports.
 
-Enter the API key in the sidebar, set the matching environment variable, or configure `.streamlit/secrets.toml`:
+Enter the API key in the sidebar, set matching environment variables, or copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`. The config file can select the provider and model as well as hold the API keys:
 
 ```toml
-# Choose one provider:
+LLM_PROVIDER = "groq"
+
+GROQ_API_KEY = "your-groq-api-key"
+GROQ_MODEL = "openai/gpt-oss-120b"
+
 GEMINI_API_KEY = "your-gemini-api-key"
-# GROQ_API_KEY = "your-groq-api-key"
+GEMINI_MODEL = "gemini-3.6-flash"
 ```
 
-That secrets file is ignored by Git. The sidebar key is held in memory and is not written into reports.
+That secrets file is ignored by Git. Environment variables override values from the file, while a value entered in the sidebar is held in memory and is not written into reports. The **Delete discovery history** button removes past runs, findings, and activity events without deleting service cards.
 
 ### What happens to the results?
 

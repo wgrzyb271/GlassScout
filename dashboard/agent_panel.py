@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+from inspect import signature
 import json
 import os
 import shutil
@@ -32,54 +33,143 @@ def networks():
 def configured_key(provider: str = "gemini") -> str:
     names = ("GROQ_API_KEY",) if provider == "groq" else ("GEMINI_API_KEY", "GOOGLE_API_KEY")
     for name in names:
-        if os.getenv(name):
-            return os.getenv(name)
+        value = configured_value(name)
+        if value:
+            return value
+    return ""
+
+
+def configured_value(name: str, default: str = "") -> str:
+    """Read agent settings from the environment or Streamlit config file."""
+    if os.getenv(name):
+        return os.getenv(name, default)
     try:
-        return st.secrets.get(names[0], "")
+        return str(st.secrets.get(name, default))
     except FileNotFoundError:
-        return ""
+        return default
 
 
-def render_agent_controls() -> None:
-    with st.expander("Discover services", expanded=False):
-        if not dependencies_available():
-            st.info("Install the updated requirements to enable the discovery agent.")
-            st.code("python -m pip install -r requirements.txt", language="bash")
-            return
-        from discovery.models import Settings
-        job = manager()
-        options = networks()
-        defaults = list(dict.fromkeys(n["cidr"] for n in options if n["default"] and n["kind"] == "LAN"))
-        if not defaults:
-            defaults = list(dict.fromkeys(n["cidr"] for n in options if n["kind"] == "LAN"))[:1]
-        labels = {n["cidr"]: f"{n['cidr']} · {n['interface']} · {n['kind']}" for n in options}
-        st.caption("Identify local web services with an AI model. Sanitized observations are sent to the selected provider (Google Gemini or Groq); verified services are added automatically.")
-        if not shutil.which("nmap"):
-            st.info("Subnet scans require Nmap. You can still test an individual URL below.")
-            defaults = []
-        selected = st.multiselect("Local subnets", list(labels), default=defaults, format_func=lambda v: labels[v], disabled=job.running)
-        custom = st.text_input("Custom local subnet (optional)", placeholder="192.168.1.0/24", disabled=job.running, help="Use a smaller range here if a detected subnet is too large; deselect the broader subnet above.")
-        if not options:
-            st.caption("No local IPv4 subnet detected. Enter an explicit local URL to test a service.")
-        seed = st.text_area("Extra / test URLs", placeholder="http://127.0.0.1:8765", disabled=job.running)
-        provider_names = {"gemini": "Gemini", "groq": "Groq"}
-        default_provider = os.getenv("LLM_PROVIDER") or ("groq" if os.getenv("GROQ_API_KEY") and not os.getenv("GEMINI_API_KEY") else "gemini")
-        provider = st.selectbox("AI provider", list(provider_names), index=list(provider_names).index(default_provider) if default_provider in provider_names else 0, format_func=provider_names.get, disabled=job.running)
-        pname = provider_names[provider]
-        key = st.text_input(f"{pname} API key", type="password", value=configured_key(provider), key=f"agent_key_{provider}", disabled=job.running, help=f"Kept only in memory. You can also use {'GROQ_API_KEY' if provider == 'groq' else 'GEMINI_API_KEY'} or Streamlit secrets.")
-        default_model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b") if provider == "groq" else os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-        model = st.text_input(f"{pname} model", value=default_model, key=f"agent_model_{provider}", disabled=job.running, help="Use a model available to your account's free tier.")
+def close_discovery_dialog() -> None:
+    st.session_state.pop("show_discovery_dialog", None)
+
+
+_DIALOG_SUPPORTS_ON_DISMISS = "on_dismiss" in signature(st.dialog).parameters
+_DISCOVERY_DIALOG_OPTIONS = {"on_dismiss": close_discovery_dialog} if _DIALOG_SUPPORTS_ON_DISMISS else {}
+
+
+@st.dialog("Discover services", width="large", **_DISCOVERY_DIALOG_OPTIONS)
+def render_discovery_dialog() -> None:
+    from discovery.models import Settings
+
+    job = manager()
+    options = networks()
+    defaults = list(dict.fromkeys(n["cidr"] for n in options if n["default"] and n["kind"] == "LAN"))
+    if not defaults:
+        defaults = list(dict.fromkeys(n["cidr"] for n in options if n["kind"] == "LAN"))[:1]
+    labels = {n["cidr"]: f"{n['cidr']} · {n['interface']} · {n['kind']}" for n in options}
+
+    st.markdown("#### 1. Choose where to look")
+    st.caption("Enter a known local URL, scan one or more local subnets, or use both.")
+    seed = st.text_area(
+        "Known service URLs",
+        placeholder="http://192.168.1.40:3000\nhttp://127.0.0.1:8765",
+        disabled=job.running,
+        help="One HTTP or HTTPS URL per line. This is the fastest option when you already know an address.",
+    )
+    if not shutil.which("nmap"):
+        st.info("Automatic subnet scanning needs Nmap. Known URLs above still work without it.")
+        defaults = []
+    selected = st.multiselect(
+        "Detected local networks",
+        list(labels),
+        default=defaults,
+        format_func=lambda value: labels[value],
+        disabled=job.running or not shutil.which("nmap"),
+    )
+    custom = st.text_input(
+        "Another local network (optional)",
+        placeholder="192.168.1.0/24",
+        disabled=job.running or not shutil.which("nmap"),
+        help="Use CIDR notation. A smaller range makes discovery faster.",
+    )
+    if not options:
+        st.caption("No local IPv4 network was detected automatically. You can still enter a known URL above.")
+
+    st.divider()
+    st.markdown("#### 2. AI identification")
+    st.caption("The selected model receives sanitized service observations and proposes names and dashboard URLs.")
+    provider_names = {"gemini": "Gemini", "groq": "Groq"}
+    default_provider = configured_value("LLM_PROVIDER") or ("groq" if configured_key("groq") and not configured_key("gemini") else "gemini")
+    provider_col, model_col = st.columns(2)
+    provider = provider_col.selectbox(
+        "Provider",
+        list(provider_names),
+        index=list(provider_names).index(default_provider) if default_provider in provider_names else 0,
+        format_func=provider_names.get,
+        disabled=job.running,
+    )
+    pname = provider_names[provider]
+    default_model = configured_value("GROQ_MODEL", "openai/gpt-oss-120b") if provider == "groq" else configured_value("GEMINI_MODEL", "gemini-3.6-flash")
+    model = model_col.text_input(
+        "Model",
+        value=default_model,
+        key=f"agent_model_{provider}",
+        disabled=job.running,
+        help="Loaded from .streamlit/secrets.toml and editable for this session.",
+    )
+    key = st.text_input(
+        f"{pname} API key",
+        type="password",
+        value=configured_key(provider),
+        key=f"agent_key_{provider}",
+        disabled=job.running,
+        help=f"Loaded from .streamlit/secrets.toml or {'GROQ_API_KEY' if provider == 'groq' else 'GEMINI_API_KEY'}. It is never written to discovery reports.",
+    )
+
+    with st.expander("Advanced scan settings", expanded=False):
         ports = st.text_input("TCP ports", value="1-65535", disabled=job.running)
         minutes = st.number_input("Run time limit (minutes)", min_value=1, max_value=60, value=10, disabled=job.running)
         self_signed = st.checkbox("Allow self-signed HTTPS certificates", value=False, disabled=job.running)
-        if st.button("Run agent", type="primary", use_container_width=True, disabled=job.running):
-            try:
-                settings = Settings(networks=selected + ([custom.strip()] if custom.strip() else []), seed_urls=[s.strip() for s in seed.splitlines() if s.strip()], provider=provider, model=model.strip(), ports=ports.strip(), run_seconds=int(minutes * 60), allow_self_signed=self_signed)
-                job.start(settings, key)
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
-        st.caption("IPv4 TCP/web discovery. Scan progress may be partial when a time or request limit is reached.")
+
+    start_col, cancel_col = st.columns(2)
+    start = start_col.button("Start discovery", type="primary", use_container_width=True, disabled=job.running)
+    cancel = cancel_col.button("Cancel", use_container_width=True)
+    if cancel:
+        close_discovery_dialog()
+        st.rerun(scope="app")
+    if start:
+        try:
+            settings = Settings(
+                networks=selected + ([custom.strip()] if custom.strip() else []),
+                seed_urls=[value.strip() for value in seed.splitlines() if value.strip()],
+                provider=provider,
+                model=model.strip(),
+                ports=ports.strip(),
+                run_seconds=int(minutes * 60),
+                allow_self_signed=self_signed,
+            )
+            job.start(settings, key)
+            close_discovery_dialog()
+            st.rerun(scope="app")
+        except ValueError as exc:
+            st.error(str(exc))
+    st.caption("Discovery only connects to local IPv4 services. Progress can be partial when a time or request limit is reached.")
+
+
+def render_agent_controls() -> None:
+    if not dependencies_available():
+        st.info("Install the updated requirements to enable service discovery.")
+        st.code("python -m pip install -r requirements.txt", language="bash")
+        return
+    job = manager()
+    if st.button("Discover services", key="open_discovery", use_container_width=True, disabled=job.running):
+        if _DIALOG_SUPPORTS_ON_DISMISS:
+            st.session_state["show_discovery_dialog"] = True
+            st.rerun()
+        else:
+            render_discovery_dialog()
+    elif _DIALOG_SUPPORTS_ON_DISMISS and st.session_state.get("show_discovery_dialog"):
+        render_discovery_dialog()
 
 
 @st.fragment(run_every="1s")
@@ -119,14 +209,14 @@ def render_agent_results() -> None:
     # Remains visible even when the detailed review expander is collapsed.
     if record:
         render_progress(record, job.running)
+        if job.running and st.button("Stop agent", use_container_width=True):
+            job.stop()
+            st.info("Stopping after the current bounded request…")
     with st.expander("Discovery activity & review", expanded=job.running):
         if record:
             st.caption(f"Model calls: {record['model_calls']} · input characters: {record['input_chars']}")
             for message in record["warnings"]:
                 st.warning(message)
-        if job.running and st.button("Stop agent", use_container_width=True):
-            job.stop()
-            st.info("Stopping after the current bounded request…")
         findings = [Finding.model_validate(v) for v in data["findings"].values()]
         pending = [f for f in findings if f.state == "review"]
         st.write(f"Needs review: {len(pending)}")
@@ -160,3 +250,8 @@ def render_agent_results() -> None:
                 st.text(event["message"])
         for event in [event for event in data["events"] if not event["kind"].startswith("react_")][-3:]:
             st.caption(f"{event['kind']}: {event['message']}")
+        if st.button("Delete discovery history", use_container_width=True, disabled=job.running):
+            job.store.clear_history()
+            st.session_state.pop("agent_refresh_signature", None)
+            st.session_state.pop("agent_saved_urls", None)
+            st.rerun(scope="app")

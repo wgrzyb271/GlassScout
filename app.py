@@ -15,7 +15,7 @@ st.set_page_config(
     page_title="Home Lab · Command Center",
     page_icon="◈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 daytime = 6 <= datetime.now().hour < 18

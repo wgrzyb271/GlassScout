@@ -11,6 +11,7 @@ venv/
 /introduction.md
 /data/discovery/
 /data/*.lock
+/data/layout.json
 .env
 .env.*
 !.env.example

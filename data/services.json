@@ -6,7 +6,7 @@
     "icon": "⊞",
     "description": "A dedicated Windows workspace isolated inside the local compute environment.",
     "url": "http://192.168.1.20:8000",
-    "tone": "blue"
+    "tone": "mint"
   },
   {
     "id": "kali",
@@ -16,5 +16,23 @@
     "description": "A focused security workspace for controlled diagnostics, testing, and network analysis.",
     "url": "http://192.168.1.30:6080",
     "tone": "mint"
+  },
+  {
+    "id": "d30b3a9b-3a9b-41db-a920-3e2f1a2a2a9d",
+    "name": "GlassScout Demo",
+    "kind": "DISCOVERED SERVICE",
+    "icon": "◇",
+    "description": "Discovered on the local network.",
+    "url": "http://127.0.0.1:8765/",
+    "tone": "mint"
+  },
+  {
+    "id": "d6a8a1e3-1d80-4689-ab63-621ed583d395",
+    "name": "AirTunes",
+    "kind": "DISCOVERED SERVICE",
+    "icon": "◇",
+    "description": "Discovered on the local network.",
+    "url": "http://192.168.1.225:7000/",
+    "tone": "blue"
   }
 ]
