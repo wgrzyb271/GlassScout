@@ -1,1 +1,8 @@
 streamlit>=1.38,<2
+pydantic>=2.10,<3
+langchain>=1.2,<2
+langchain-core>=1.0,<2
+langchain-google-genai>=4.0,<5
+langchain-groq>=1.0,<2
+psutil>=6,<8
+zeroconf>=0.140,<1

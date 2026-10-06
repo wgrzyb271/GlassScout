@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from dashboard.config import DATA_FILE, DEFAULT_SERVICES, ROOT_DIR, TONES
+from dashboard.persistence import atomic_json, data_lock
 
 LEGACY_DATA_FILE = ROOT_DIR / "services.json"
 
@@ -42,11 +43,42 @@ def load_services() -> list[dict[str, str]]:
 
 
 def save_services(services: list[dict[str, str]]) -> None:
-    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    DATA_FILE.write_text(
-        json.dumps([clean_service(item) for item in services], indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    with data_lock(DATA_FILE.parent):
+        atomic_json(DATA_FILE, [clean_service(item) for item in services])
+
+
+def mutate_services(*, endpoints: dict[str, str] | None = None, add: dict | None = None, remove: str | None = None, updates: dict[str, dict] | None = None) -> None:
+    """Apply UI changes to the latest file, preserving background additions."""
+    with data_lock(DATA_FILE.parent):
+        if DATA_FILE.exists():
+            saved = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+            if not isinstance(saved, list):
+                raise ValueError("Invalid services file")
+            services = [clean_service(item) for item in saved]
+        else:
+            services = [clean_service(item) for item in DEFAULT_SERVICES]
+        if endpoints:
+            for item in services:
+                if item["id"] in endpoints:
+                    item["url"] = endpoints[item["id"]]
+        if add:
+            services.append(clean_service(add))
+        if updates:
+            known = {item["id"] for item in services}
+            if not set(updates).issubset(known):
+                raise ValueError("This service no longer exists. Refresh the dashboard.")
+            fields = {"name", "url", "kind", "description", "icon", "tone"}
+            for index, item in enumerate(services):
+                if item["id"] in updates:
+                    changed = {key: value for key, value in updates[item["id"]].items() if key in fields}
+                    merged = {**item, **changed}
+                    if not str(merged["name"]).strip() or not str(merged["url"]).strip():
+                        raise ValueError("Name and URL are required.")
+                    merged["name"], merged["url"] = str(merged["name"]).strip(), str(merged["url"]).strip()
+                    services[index] = clean_service(merged)
+        if remove:
+            services = [item for item in services if item["id"] != remove]
+        atomic_json(DATA_FILE, services)
 
 
 def normalized_url(value: str) -> str:

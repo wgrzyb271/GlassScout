@@ -12,6 +12,7 @@ Home Lab Command Center brings your local web interfaces together in one place. 
 - See the current time without refreshing the page.
 - Use the dashboard on desktop, tablet, or phone.
 - Enjoy a gently animated Golden Gate background with a frosted-glass interface.
+- Run a Gemini-powered agent to discover local web services, automatically add verified results, and review uncertain matches.
 
 ## 🌗 Day and night appearance
 
@@ -37,6 +38,11 @@ The dashboard pairs a live service overview with a frosted-glass interface and a
 *The sidebar expanded for endpoint settings and service management.*
 
 ## 🚀 Get started
+
+### Prerequisites
+
+- Gemini or Groq API key for AI discovery.
+- Nmap for subnet scans (not needed for individual URLs).
 
 ### 1. Install Python
 
@@ -81,7 +87,8 @@ Open the local address shown in the terminal, usually <http://localhost:8501>. T
 2. Enter a name and URL. Category, description, icon, and accent color are optional presentation details.
 3. Select **Add to dashboard**. The new card appears with the others.
 4. To change a service URL later, edit it in **Service Endpoints** and select **Save endpoint changes**.
-5. To remove a card, open **Manage services** and select **Remove** beside it.
+5. To edit a card, open **Manage services → Modify**, change its name, URL, category, description, icon or accent, then select **Save changes**. **Cancel** discards the edits.
+6. To remove a card, open **Manage services** and select **Remove** beside it.
 
 Your service list is saved locally in `data/services.json` and is kept when you restart the app. Use URLs that your browser can reach, for example `http://192.168.1.20:8080` or `https://proxmox.example.local:8006`.
 
@@ -89,15 +96,110 @@ Your service list is saved locally in `data/services.json` and is kept when you 
 
 Turn on **Check node heartbeat** to check whether each service's host and TCP port accept a connection. `ONLINE` means the port accepted the connection; `UNREACHABLE` means it did not. This does **not** sign in, load the service's web page, or check whether the application itself is healthy. With the option off, cards show `LINK READY` instead.
 
-## 🔭 Planned: LangChain network discovery
+## 🔎 Discover services automatically
 
-A future version is planned to include an on-demand LangChain agent. When started by the user, it will scan the authorized local network for reachable hosts and open service ports, gather details about active services, and use those findings to add new services to the dashboard or update existing entries. This capability is planned and is **not available in the current version**. Network discovery should only be run on networks you own or are authorized to assess.
+Open **Discover services** in the sidebar to find web applications on your local network. The agent reads your computer's network settings, collects service responses, and uses Gemini or Groq to identify applications even when they use nonstandard ports.
+
+Enter the API key in the sidebar, set the matching environment variable, or configure `.streamlit/secrets.toml`:
+
+```toml
+# Choose one provider:
+GEMINI_API_KEY = "your-gemini-api-key"
+# GROQ_API_KEY = "your-groq-api-key"
+```
+
+That secrets file is ignored by Git. The sidebar key is held in memory and is not written into reports.
+
+### What happens to the results?
+
+- **Verified:** a matching panel and separate machine-readable identity are checked again before the service is added automatically. Repeated discoveries of the same panel update its existing entry rather than create a duplicate.
+- **Needs review:** inspect the proposed name, URL, evidence, and reason for uncertainty. Open the panel, then approve, correct, or reject the suggestion.
+- **Rejected:** unchanged rejected suggestions stay dismissed on subsequent runs. Manual approvals are remembered too.
+
+## 🧭 How it works
+
+### Discovery flow
+
+```mermaid
+sequenceDiagram
+    participant P as Panel
+    participant J as JobManager
+    participant A as identify()
+    participant S as Store
+    P->>J: Start discovery
+    J->>J: Collect candidate endpoints
+    loop Each eligible endpoint
+        J->>A: Identify with a bounded Probe
+        A-->>J: Finding
+        J->>S: Persist eligible result
+    end
+    P->>J: Read progress snapshot
+```
+
+### Agent step
+
+```mermaid
+sequenceDiagram
+    participant A as LangChain
+    participant G as DiscoveryGuard
+    participant M as AI model
+    participant T as Tool
+    A->>G: Prepare context and check limits
+    G->>M: Request next action
+    M-->>G: AIMessage with tool call
+    G-->>A: Validate call or request repair
+    opt Valid call
+        A->>G: Wrap tool execution
+        G->>T: Execute through handler
+        T-->>G: ToolMessage and artifact
+        G-->>A: Record and return result
+    end
+```
+
+### Verification and review
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    state Decision <<choice>>
+    [*] --> Decision
+    Decision --> verified: Evidence confirmed
+    Decision --> review: Uncertain or incomplete
+    review --> approved: User approves
+    review --> rejected: User rejects
+```
+
+## 🧪 Try a fake service
+
+Start a separate terminal in the project directory and activate your environment, then run:
+
+```bash
+python -m devtools.fake_service --scenario normal --port 0
+```
+
+The terminal prints a local URL with an automatically selected free port. Paste it into **Extra / test URLs**, deselect the subnets to test just that URL, enter your Gemini API key, and run the agent. The test server itself requires only Python; the discovery agent requires the packages listed above. Stop the server with **Ctrl+C**.
+
+| Scenario | What it tests |
+| --- | --- |
+| `normal` | Consistent page and identity API, suitable for automatic verification |
+| `unknown` | Generic sign-in page that needs manual review |
+| `conflict` | A Proxmox title contradicted by the identity API |
+| `redirect-loop` | Repeated redirects and no-progress limits |
+| `slow` | Request timeouts |
+| `error` | An unavailable service returning HTTP 503 |
+| `injection` | Page text attempting to redirect the agent outside the permitted target |
+
+To make the fixture reachable from another device on your LAN, add `--host 0.0.0.0` and use the test machine's LAN address. Choose a fixed `--port` to compare scenarios at the same endpoint.
+
+Offline tests and implementation notes are described in [the development guide](docs/development.md).
 
 ## 📋 Requirements
 
 - Python 3.10 or newer
 - Streamlit (installed from `requirements.txt`)
+- Discovery packages from `requirements.txt` and a Gemini API key for the agent
+- Nmap for subnet scans (not needed for an individual test URL)
 - A modern web browser
 - Network access during the initial dependency installation
 
-The dashboard uses the included local photo, so it does not need an external image service. Service data is stored in a local JSON file; no database or account is required.
+The dashboard uses the included local photo, so it does not need an external image service. Manual service management works locally without an account. Gemini discovery additionally requires internet access and a Google API key.

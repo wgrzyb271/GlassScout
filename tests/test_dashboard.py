@@ -1,0 +1,132 @@
+"""Streamlit UI checks with isolated persistence and no network calls."""
+
+from pathlib import Path
+import json
+from tempfile import TemporaryDirectory
+import unittest
+from unittest.mock import patch
+
+try:
+    from streamlit.testing.v1 import AppTest
+except ImportError:
+    AppTest = None
+
+
+@unittest.skipIf(AppTest is None, "Streamlit is not installed in this test interpreter")
+class DashboardTests(unittest.TestCase):
+    def test_modify_service_save_cancel_and_endpoint_sync(self):
+        from dashboard import agent_panel, services
+        with TemporaryDirectory() as directory:
+            target = Path(directory) / "services.json"
+            with patch.object(services, "DATA_FILE", target), patch.object(agent_panel, "dependencies_available", return_value=False):
+                services.save_services([services.clean_service({"id": "test", "name": "Old name", "url": "http://localhost:8000"})])
+                app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py")).run(timeout=20)
+                app.button(key="modify_test").click().run()
+                app.text_input(key="edit_name_test").set_value("New name")
+                app.text_input(key="edit_url_test").set_value("http://localhost:9000")
+                app.text_input(key="edit_kind_test").set_value("monitoring")
+                app.text_area(key="edit_description_test").set_value("Updated description")
+                app.text_input(key="edit_icon_test").set_value("★")
+                app.selectbox(key="edit_tone_test").set_value("mint")
+                next(b for b in app.button if b.label == "Save changes").click().run()
+                self.assertFalse(app.exception, [e.message for e in app.exception])
+                saved = json.loads(target.read_text())[0]
+                self.assertEqual(saved["id"], "test")
+                self.assertEqual(saved["name"], "New name")
+                self.assertEqual(saved["url"], "http://localhost:9000")
+                self.assertEqual(saved["kind"], "MONITORING")
+                self.assertEqual(saved["description"], "Updated description")
+                self.assertEqual(saved["icon"], "★")
+                self.assertEqual(saved["tone"], "mint")
+                self.assertEqual(app.text_input(key="endpoint_test").value, saved["url"])
+                app.button(key="modify_test").click().run()
+                app.text_input(key="edit_name_test").set_value("Discard me")
+                next(b for b in app.button if b.label == "Cancel").click().run()
+                self.assertEqual(json.loads(target.read_text())[0]["name"], "New name")
+                app.button(key="modify_test").click().run()
+                self.assertEqual(app.text_input(key="edit_name_test").value, "New name")
+                app.text_input(key="edit_name_test").set_value(" ")
+                next(b for b in app.button if b.label == "Save changes").click().run()
+                self.assertTrue(any("required" in w.value for w in app.warning))
+                self.assertEqual(json.loads(target.read_text())[0]["name"], "New name")
+
+    def test_live_scan_bars_and_countdown(self):
+        script = '''
+import streamlit as st
+from dashboard.discovery_progress import render_progress
+from discovery.models import RunRecord
+record = RunRecord(phase="Scanning TCP ports", timeout_seconds=600, remaining_seconds=475,
+                   scan_timeout_seconds=240, scan_remaining_seconds=115).model_dump()
+render_progress(record, True)
+'''
+        app = AppTest.from_string(script).run()
+        self.assertFalse(app.exception, [e.message for e in app.exception])
+        bars = app.get("progress")
+        self.assertEqual(len(bars), 2)
+        self.assertEqual(bars[0].proto.text, "Agent timeout in 07:55")
+        self.assertEqual(bars[1].proto.text, "TCP scan timeout in 01:55")
+        self.assertTrue(any("not scan completion" in c.value for c in app.caption))
+
+    def test_finished_or_interrupted_run_does_not_show_live_timeout(self):
+        script = '''
+from dashboard.discovery_progress import render_progress
+from discovery.models import RunRecord
+record = RunRecord(phase="Scanning TCP ports", timeout_seconds=600, remaining_seconds=400,
+                   endpoints=4, processed=2).model_dump()
+render_progress(record, False)
+'''
+        app = AppTest.from_string(script).run()
+        self.assertFalse(app.exception)
+        self.assertEqual(len(app.get("progress")), 1)
+        self.assertIn("2 / 4", app.get("progress")[0].proto.text)
+        self.assertTrue(any("interrupted" in m.value for m in app.markdown))
+
+    def test_missing_agent_dependencies_keeps_dashboard_usable(self):
+        from dashboard import agent_panel
+        with patch.object(agent_panel, "dependencies_available", return_value=False):
+            app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py")).run(timeout=20)
+        self.assertFalse(app.exception, [e.message for e in app.exception])
+        self.assertTrue(any("requirements" in info.value for info in app.info))
+        self.assertFalse(any(button.label == "Run agent" for button in app.button))
+
+    def test_discovery_controls_and_manual_approval(self):
+        from dashboard import agent_panel, services
+        from discovery.models import Finding, Proposal
+        from discovery.runner import JobManager
+        with TemporaryDirectory() as directory:
+            data = Path(directory)
+            job = JobManager(data)
+            job.store.save_finding(Finding(endpoint="http://127.0.0.1:48765/", proposal=Proposal(name="Possible app", url="http://127.0.0.1:48765/"), reason="Identity needs review"))
+            job.store.event("react_reason", "Step 1 · Check the identity API")
+            job.store.event("react_act", "Step 1 · fetch_service")
+            job.store.event("react_observe", "Step 1 · HTTP 200")
+            with patch.object(agent_panel, "dependencies_available", return_value=True), patch.object(agent_panel, "manager", return_value=job), patch.object(agent_panel, "networks", return_value=[]), patch.object(agent_panel, "configured_key", return_value=""), patch.object(agent_panel, "DATA_FILE", data / "services.json"), patch.object(services, "DATA_FILE", data / "services.json"):
+                app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py")).run(timeout=20)
+                self.assertFalse(app.exception, [e.message for e in app.exception])
+                self.assertTrue(any(button.label == "Run agent" for button in app.button))
+                self.assertTrue(any("ReAct · Reason" in item.value for item in app.markdown))
+                self.assertTrue(any("Check the identity API" in item.value for item in app.text))
+                self.assertTrue(any("HTTP 200" in item.value for item in app.text))
+                approve = next(button for button in app.button if button.label == "Approve / save changes")
+                approve.click().run(timeout=20)
+                self.assertFalse(app.exception, [e.message for e in app.exception])
+                self.assertTrue((data / "services.json").exists())
+                self.assertEqual(next(iter(job.store.read()["findings"].values()))["state"], "approved")
+
+    def test_missing_key_is_a_user_error(self):
+        from dashboard import agent_panel, services
+        from discovery.runner import JobManager
+        with TemporaryDirectory() as directory:
+            data = Path(directory)
+            job = JobManager(data)
+            with patch.object(agent_panel, "dependencies_available", return_value=True), patch.object(agent_panel, "manager", return_value=job), patch.object(agent_panel, "networks", return_value=[]), patch.object(agent_panel, "configured_key", return_value=""), patch.object(services, "DATA_FILE", data / "services.json"):
+                app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py")).run(timeout=20)
+                next(area for area in app.text_area if area.label == "Extra / test URLs").set_value("http://127.0.0.1:48765/")
+                next(button for button in app.button if button.label == "Run agent").click().run(timeout=20)
+                self.assertFalse(app.exception, [e.message for e in app.exception])
+                self.assertTrue(any("API key" in error.value for error in app.error))
+                self.assertFalse(job.running)
+
+
+if __name__ == "__main__":
+    unittest.main()

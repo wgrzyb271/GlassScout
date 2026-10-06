@@ -8,6 +8,7 @@ from dashboard.components import render_header, render_service_grid
 from dashboard.services import is_available, load_services, normalized_url
 from dashboard.sidebar import render_sidebar
 from dashboard.style_loader import inject_styles
+from dashboard.agent_panel import render_agent_controls, render_agent_results
 
 
 st.set_page_config(
@@ -23,6 +24,8 @@ inject_styles(daytime=daytime)
 services = load_services()
 with st.sidebar:
     services, check_heartbeats = render_sidebar(services)
+    render_agent_controls()
+    render_agent_results()
 
 for service in services:
     endpoint = service["url"]

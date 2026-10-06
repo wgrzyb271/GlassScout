@@ -4,3 +4,14 @@ __pycache__/
 venv/
 .venv/
 .streamlit/secrets.toml
+
+# Local development roadmap
+/DEVELOPMENT_PLAN.local.md
+# Local learning guide; publish later
+/introduction.md
+/data/discovery/
+/data/*.lock
+.env
+.env.*
+!.env.example
+.pytest_cache/
