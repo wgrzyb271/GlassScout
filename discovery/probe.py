@@ -21,6 +21,7 @@ from discovery.models import Observation, clean_url
 
 def redact(text: str) -> str:
     text = re.sub(r"AIza[\w-]{25,}", "[redacted]", text)
+    text = re.sub(r"\borg_[A-Za-z0-9]+\b", "[organization]", text)
     text = re.sub(r"(?i)\b(bearer\s+)[\w.\-]+", r"\1[redacted]", text)
     text = re.sub(r'''(?i)(["']?(?:api[_-]?key|token|password|passwd|secret|authorization|cookie|csrf)[\w-]*["']?\s*[:=]\s*)(["'][^"']*["']|[^\s,;}<]+)''', r"\1[redacted]", text)
     text = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[email]", text)

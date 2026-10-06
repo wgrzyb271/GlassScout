@@ -200,6 +200,8 @@ To make the fixture reachable from another device on your LAN, add `--host 0.0.0
 
 Offline tests and implementation notes are described in [the development guide](docs/development.md).
 
+Sanitized discovery failures are saved locally as JSON-formatted `.err` files in `data/discovery/errors/`. API keys, tokens, credentials, email addresses, and provider organization identifiers are redacted before writing.
+
 ## 📋 Requirements
 
 - Python 3.10 or newer

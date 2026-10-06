@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+import re
+import traceback
 from uuid import uuid4
 
 from discovery.models import Finding, RunRecord, clean_url
@@ -35,6 +38,8 @@ class Store:
         """Clear discovery diagnostics and reviews without touching services."""
         with data_lock(self.data_dir):
             atomic_json(self.state_file, {"findings": {}, "run": None, "events": []})
+            for error_file in (self.directory / "errors").glob("*.err"):
+                error_file.unlink(missing_ok=True)
 
     def save_run(self, run: RunRecord) -> None:
         with data_lock(self.data_dir):
@@ -49,6 +54,29 @@ class Store:
             data = self.read()
             data["events"] = (data["events"] + [{"time": now(), "kind": kind, "message": redact(message)[:600]}])[-50:]
             atomic_json(self.state_file, data)
+
+    def error(self, category: str, error: Exception, context: dict[str, str] | None = None) -> Path:
+        """Persist a sanitized diagnostic as a JSON-formatted .err file."""
+        from discovery.models import now
+        from discovery.probe import redact
+
+        created = datetime.now(timezone.utc)
+        safe_category = re.sub(r"[^a-z0-9-]+", "-", category.lower()).strip("-") or "error"
+        target = self.directory / "errors" / f"{created:%Y%m%dT%H%M%S%fZ}_{safe_category}_{uuid4().hex[:8]}.err"
+        safe_context = {str(key): redact(str(value))[:1000] for key, value in (context or {}).items()}
+        stack = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        payload = {
+            "time": now(),
+            "category": safe_category,
+            "exception": type(error).__name__,
+            "context": safe_context,
+            "message": redact(str(error))[:8000],
+            "traceback": redact(stack)[-16000:],
+        }
+        with data_lock(self.data_dir):
+            atomic_json(target, payload)
+        self.event("error_log", f"Saved diagnostic: {target.name}")
+        return target
 
     def _upsert(self, finding: Finding, *, manual: bool = False) -> bool:
         from dashboard.services import clean_service

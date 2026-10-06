@@ -86,6 +86,7 @@ class JobManager:
             self.warning(str(exc))
             self.update(status="partial", phase="Model unavailable — results saved")
         except Exception as exc:
+            self.store.error("discovery-run", exc, {"phase": self.record.phase if self.record else "unknown"})
             self.store.event("error", f"Run failed: {type(exc).__name__}")
             self.update(status="failed", phase=f"Run failed: {type(exc).__name__}", detail="See local diagnostics; existing services were kept.")
         finally:
@@ -148,7 +149,7 @@ class JobManager:
                 continue
             probe = Probe(url, address, budget.service())
             try:
-                finding = await identify(probe, model, self.store.event)
+                finding = await identify(probe, model, self.store.event, self.store.error)
             except ModelUnavailable as exc:
                 if hasattr(exc, "finding"):
                     self.store.save_finding(exc.finding)

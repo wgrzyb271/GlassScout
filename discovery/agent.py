@@ -18,9 +18,14 @@ from discovery.prompts import REACT_SYSTEM_PROMPT
 from discovery.tools import service_tools
 
 
-async def identify(probe: Probe, model: BaseChatModel, event: Callable[[str, str], None]) -> Finding:
+async def identify(
+    probe: Probe,
+    model: BaseChatModel,
+    event: Callable[[str, str], None],
+    error: Callable[[str, Exception, dict[str, str]], object] | None = None,
+) -> Finding:
     tools = list(service_tools(probe).values())
-    guard = DiscoveryGuard(probe, tools, event)
+    guard = DiscoveryGuard(probe, tools, event, error)
     reason = "The agent finished without a verified service proposal."
     try:
         await probe.fetch(probe.endpoint)

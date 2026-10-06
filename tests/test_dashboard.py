@@ -14,6 +14,20 @@ except ImportError:
 
 @unittest.skipIf(AppTest is None, "Streamlit is not installed in this test interpreter")
 class DashboardTests(unittest.TestCase):
+    def test_service_board_key_changes_with_service_membership(self):
+        from dashboard import service_board
+
+        with patch.object(service_board, "_service_board", return_value=None) as component:
+            service_board.service_board([{"id": "a"}, {"id": "b"}], {"items": []})
+            first_key = component.call_args.kwargs["key"]
+            service_board.service_board([{"id": "a"}], {"items": []})
+            second_key = component.call_args.kwargs["key"]
+            service_board.service_board([{"id": "b"}, {"id": "a"}], {"items": []})
+            reordered_key = component.call_args.kwargs["key"]
+
+        self.assertNotEqual(first_key, second_key)
+        self.assertEqual(first_key, reordered_key)
+
     def test_sidebar_starts_collapsed(self):
         source = (Path(__file__).resolve().parents[1] / "app.py").read_text()
         self.assertIn('initial_sidebar_state="collapsed"', source)

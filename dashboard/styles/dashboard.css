@@ -129,6 +129,14 @@ header[data-testid="stHeader"] [data-testid="stBaseButton-header"] { display: no
   box-shadow: none !important;
 }
 
+/* Keep the service manager compact; long lists scroll inside the dialog. */
+.manage-services-marker { display: none; }
+.manage-close-spacer { height: .5rem; }
+[data-testid="stDialog"]:has(.manage-services-marker) [data-testid="stVerticalBlock"] { gap: 1rem !important; }
+[data-testid="stDialog"]:has(.manage-services-marker) [data-testid="stHorizontalBlock"] { gap: 1.5rem !important; }
+[data-testid="stDialog"]:has(.manage-services-marker) hr { margin: .5rem 0 1.5rem !important; }
+[data-testid="stDialog"]:has(.manage-services-marker) button { min-height: 2.35rem !important; }
+
 /* Header and clock */
 .hero { display: flex; min-width: 0; align-items: flex-end; justify-content: space-between; gap: clamp(1.25rem,4vw,2rem); padding: .2rem 0 clamp(1.6rem,4vw,2.5rem); border-bottom: 1px solid rgba(255,255,255,.12); overflow-wrap: anywhere; }
 .eyebrow { display: flex; align-items: center; gap: .7rem; color: var(--accent); font: 500 .72rem 'DM Mono',monospace; letter-spacing: .17em; }

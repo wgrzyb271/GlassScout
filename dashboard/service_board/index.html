@@ -20,7 +20,7 @@
     .slot:hover>.card,.slot:hover>.folder,.group-service:hover { transform:translateY(-3px); border-color:rgba(255,255,255,.36); }
     .dragging { opacity:.42; transform:none!important; pointer-events:none; }
     .drag-ghost { position:fixed!important; z-index:9999!important; margin:0!important; opacity:.96!important; pointer-events:none!important; transform:translateY(-10px) scale(1.025) rotate(.35deg)!important; transform-origin:center; box-shadow:0 38px 82px rgba(0,0,0,.52),0 0 42px rgba(var(--tone-rgb),.24),inset 0 1px rgba(255,255,255,.3)!important; transition:none!important; }
-    body.is-dragging,body.is-dragging * { cursor:grabbing!important; }
+    body.is-dragging,body.is-dragging * { cursor:grabbing!important; user-select:none!important; }
     .drop-target { border-color:var(--tone)!important; box-shadow:0 0 0 2px rgba(var(--tone-rgb),.42),0 25px 56px rgba(0,0,0,.31)!important; }
     .reorder-before { box-shadow:inset 0 5px #7dd3fc,0 25px 56px rgba(0,0,0,.31)!important; }
     .reorder-after { box-shadow:inset 0 -5px #7dd3fc,0 25px 56px rgba(0,0,0,.31)!important; }
@@ -161,11 +161,15 @@
       ghost.classList.remove('dragging','drop-target','reorder-before','reorder-after','reorder-horizontal'); ghost.classList.add('drag-ghost');
       ghost.removeAttribute('data-drop-role'); ghost.querySelectorAll('[id]').forEach(node=>node.removeAttribute('id'));
       Object.assign(ghost.style,{width:`${rect.width}px`,height:`${rect.height}px`,left:`${rect.left}px`,top:`${rect.top}px`});
-      state.offsetX=state.startX-rect.left; state.offsetY=state.startY-rect.top; state.ghost=ghost; document.body.append(ghost); document.body.classList.add('is-dragging');
+      state.offsetX=state.startX-rect.left; state.offsetY=state.startY-rect.top; state.ghostWidth=rect.width; state.ghostHeight=rect.height; state.ghost=ghost; document.body.append(ghost); document.body.classList.add('is-dragging');
     }
     function moveDragGhost(state,event) {
       if(!state.ghost)return;
-      state.ghost.style.left=`${event.clientX-state.offsetX}px`; state.ghost.style.top=`${event.clientY-state.offsetY}px`;
+      const bounds=board.getBoundingClientRect(),padding=16;
+      const minLeft=Math.max(padding,bounds.left+padding),maxLeft=Math.max(minLeft,Math.min(window.innerWidth-state.ghostWidth-padding,bounds.right-state.ghostWidth-padding));
+      const minTop=Math.max(padding,bounds.top+padding),maxTop=Math.max(minTop,Math.min(window.innerHeight-state.ghostHeight-padding,bounds.bottom-state.ghostHeight-padding));
+      const left=Math.min(maxLeft,Math.max(minLeft,event.clientX-state.offsetX)),top=Math.min(maxTop,Math.max(minTop,event.clientY-state.offsetY));
+      state.ghost.style.left=`${left}px`; state.ghost.style.top=`${top}px`;
     }
     function removeDragGhost(state) { state?.ghost?.remove(); document.body.classList.remove('is-dragging'); }
     function enablePointerDrag(el,payload) {
@@ -270,6 +274,7 @@
     }
     function render() {
       board.replaceChildren(); document.querySelector('.overlay')?.remove();
+      if(openGroupId&&!findGroup(openGroupId))openGroupId=null;
       document.body.classList.toggle('folder-open',Boolean(openGroupId));
       if(!layout.items.length) board.append(make('div','empty','No services yet. Add the first one from the sidebar.'));
       layout.items.forEach((item,index)=>{const slot=make('div','slot');slot.append(reorderZone(index));if(item.type==='service'){const service=byId(item.id);if(service)slot.append(serviceCard(service,index));}else slot.append(folderCard(item,index));board.append(slot);});

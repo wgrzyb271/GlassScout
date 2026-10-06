@@ -120,15 +120,18 @@ def prepare_service_editor(service: dict[str, str]) -> None:
     st.session_state[f"edit_{service_id}_custom_icon"] = "" if known_icon else service["icon"]
 
 
-@st.dialog("Manage services", width="large", **_MANAGE_DIALOG_OPTIONS)
+@st.dialog("Manage services", width="medium", **_MANAGE_DIALOG_OPTIONS)
 def render_manage_services_dialog(services: list[dict[str, str]]) -> None:
     """List service actions in a dedicated modal."""
-    list_container = st.container(height=480, border=False) if len(services) > 6 else st.container(border=False)
+    st.markdown("<span class='manage-services-marker'></span>", unsafe_allow_html=True)
+    list_container = st.container(height=420, border=False) if len(services) > 6 else st.container(border=False)
     with list_container:
         if not services:
             st.info("No services to manage yet.")
-        for service in services:
-            name_col, modify_col, remove_col = st.columns([2, 1, 1])
+        for index, service in enumerate(services):
+            name_col, modify_col, remove_col = st.columns(
+                [2.2, 1, 1], gap="small", vertical_alignment="center"
+            )
             name_col.write(service["name"])
             if modify_col.button("Modify", key=f"modify_{service['id']}", use_container_width=True):
                 close_manage_services_dialog()
@@ -136,9 +139,14 @@ def render_manage_services_dialog(services: list[dict[str, str]]) -> None:
                 st.rerun(scope="app")
             if remove_col.button("Remove", key=f"remove_{service['id']}", use_container_width=True):
                 mutate_services(remove=service["id"])
+                close_manage_services_dialog()
+                st.session_state.pop("service_board_event", None)
                 st.rerun(scope="app")
-            st.divider()
-    if st.button("Close", key="close_manage_services", use_container_width=True):
+            if index < len(services) - 1:
+                st.divider()
+    st.markdown("<div class='manage-close-spacer' aria-hidden='true'></div>", unsafe_allow_html=True)
+    _, close_col, _ = st.columns([1, 1, 1], gap="small", vertical_alignment="center")
+    if close_col.button("Close", key="close_manage_services", use_container_width=True):
         close_manage_services_dialog()
         st.rerun(scope="app")
 

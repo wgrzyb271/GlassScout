@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from time import monotonic
 from typing import Callable
 
@@ -17,17 +18,86 @@ from discovery.probe import Probe, redact
 from discovery.provider import ModelUnavailable
 
 
+def _status_code(exc: Exception) -> int | None:
+    """Read a provider HTTP status without depending on a specific SDK."""
+    direct = getattr(exc, "status_code", None)
+    response = getattr(exc, "response", None)
+    response_status = getattr(response, "status_code", None)
+    for value in (direct, response_status):
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _is_transient_provider_error(exc: Exception) -> bool:
+    status = _status_code(exc)
+    if status in {429, 500, 502, 503, 504}:
+        return True
+    message = str(exc).upper()
+    return any(token in message for token in ("429", "503", "UNAVAILABLE", "RESOURCE_EXHAUSTED"))
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    return _status_code(exc) == 429 or "429" in str(exc) or "RATE LIMIT" in str(exc).upper()
+
+
+def _retry_after_seconds(exc: Exception, fallback: float) -> float:
+    """Extract SDK/header retry guidance while keeping raw provider text out of logs."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", {}) or {}
+    candidates = []
+    for name in ("retry-after", "x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
+        try:
+            value = headers.get(name)
+        except AttributeError:
+            value = None
+        if value is not None:
+            candidates.append(str(value))
+    candidates.append(str(exc))
+    patterns = (
+        r"try again in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|s)?",
+        r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(ms|s)?\s*$",
+    )
+    for candidate in candidates:
+        for pattern in patterns:
+            match = re.search(pattern, candidate, re.I)
+            if match:
+                seconds = float(match.group(1))
+                if (match.group(2) or "s").lower() == "ms":
+                    seconds /= 1000
+                return min(60.0, max(0.2, seconds + 0.25))
+    return fallback
+
+
 class DiscoveryGuard(AgentMiddleware):
     """One middleware instance per service; never shared across agent runs."""
 
-    def __init__(self, probe: Probe, tools: list[BaseTool], event: Callable[[str, str], None]):
+    def __init__(self, probe: Probe, tools: list[BaseTool], event: Callable[[str, str], None], error: Callable[[str, Exception, dict[str, str]], object] | None = None):
         super().__init__()
-        self.probe, self.event = probe, event
+        self.probe, self.event, self.error = probe, event, error
         self.allowed_tools = {tool.name: tool for tool in tools}
         self.schema_chars = sum(len(json.dumps(t.args_schema.model_json_schema())) + len(t.description) for t in tools)
         self.stale = 0
         self.proposal = None
         self.finding: Finding | None = None
+
+    def log_error(self, category: str, exc: Exception, attempt: int | None = None) -> None:
+        if self.error is None:
+            return
+        context = {
+            "endpoint": self.probe.endpoint,
+            "provider": self.probe.budget.run.settings.provider,
+            "model": self.probe.budget.run.settings.model,
+        }
+        if attempt is not None:
+            context["attempt"] = str(attempt)
+        try:
+            self.error(category, exc, context)
+        except Exception:
+            # Diagnostics must never mask the original provider failure.
+            pass
 
     def trace(self, phase: str, message: str) -> None:
         """Log action summaries and real outcomes, never raw model reasoning."""
@@ -57,23 +127,41 @@ class DiscoveryGuard(AgentMiddleware):
             # LangChain executes tools; Google's separate AFC loop must not.
             model_settings={**request.model_settings, **google_only},
         )
-        deadline = monotonic() + min(25, self.probe.budget.remaining())
+        # Keep enough room to respect a provider rate-limit reset and retry
+        # without exceeding the per-service budget.
+        deadline = monotonic() + min(60, self.probe.budget.remaining())
+        async def cancellable_wait(seconds: float) -> None:
+            until = monotonic() + seconds
+            while monotonic() < until:
+                self.probe.budget.check()
+                await asyncio.sleep(min(0.2, max(0.01, until - monotonic())))
+
         async def call_with_retry():  # TRANSIENT-RETRY
             for attempt in range(3):
                 try:
                     return await handler(request)
                 except Exception as exc:
-                    transient = any(t in str(exc) for t in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED"))
-                    if not transient or attempt == 2:
+                    rate_limited = _is_rate_limit(exc)
+                    self.log_error("provider-rate-limit" if rate_limited else "provider-error", exc, attempt + 1)
+                    if not _is_transient_provider_error(exc) or attempt == 2:
                         raise
-                    await asyncio.sleep(2 * (attempt + 1))
+                    delay = _retry_after_seconds(exc, 2 * (attempt + 1))
+                    if delay + 0.5 >= deadline - monotonic():
+                        raise ModelUnavailable(
+                            "Provider rate limit did not reset within this service's time budget; partial results saved."
+                        ) from None
+                    if rate_limited:
+                        self.trace("observe", f"Provider rate limit; retrying in {delay:.1f} seconds.")
+                    await cancellable_wait(delay)
         task = asyncio.create_task(call_with_retry())
         try:
             # Only a cancellation watchdog, not a model/tool execution loop.
             while not task.done():
                 self.probe.budget.check()
                 if monotonic() >= deadline:
-                    raise ModelUnavailable("Model request timed out; run saved for retry.")
+                    timeout = ModelUnavailable("Model request timed out; run saved for retry.")
+                    self.log_error("provider-timeout", timeout)
+                    raise timeout
                 await asyncio.wait({task}, timeout=0.2)
             return task.result()
         except (LimitReached, ModelUnavailable):
@@ -82,7 +170,6 @@ class DiscoveryGuard(AgentMiddleware):
             # after_model routes this to a bounded repair turn.
             return ModelResponse(result=[AIMessage(content="Invalid model response; a valid tool call is required.")])
         except Exception:
-            import os, sys; _e = sys.exc_info()[1]; print('GEMINI DEBUG', type(_e).__name__, str(_e).replace(os.getenv('GEMINI_API_KEY') or '\0', '***')[:800], flush=True)  # TEMP-DEBUG
             # Provider exceptions may contain the key; never persist their text.
             raise ModelUnavailable("The model provider is unavailable. Check the API key, model access, quota and internet connection.") from None
         finally:

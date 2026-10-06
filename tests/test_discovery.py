@@ -22,6 +22,7 @@ from dashboard import services
 from devtools.fake_service.__main__ import make_server, response_for
 from discovery.agent import identify
 from discovery.budget import Budget, LimitReached
+from discovery.middleware import DiscoveryGuard, _is_rate_limit, _is_transient_provider_error, _retry_after_seconds
 from discovery.models import EvidenceRef, FetchServiceInput, Finding, FinishServiceInput, Observation, Proposal, RunRecord, Settings, clean_url
 from discovery.network import parse_host, scan_tcp
 from discovery.probe import Probe, redact, resolve_local
@@ -148,6 +149,54 @@ class ScriptedModel(BaseChatModel):
 
 
 class ValidationTests(unittest.TestCase):
+    def test_provider_rate_limit_delay_is_parsed_without_logging_raw_error(self):
+        error = RuntimeError(
+            "429 rate limit for private-org; Please try again in 20.79s."
+        )
+        self.assertTrue(_is_rate_limit(error))
+        self.assertTrue(_is_transient_provider_error(error))
+        self.assertAlmostEqual(_retry_after_seconds(error, 2), 21.04, places=2)
+
+    def test_rate_limit_waits_and_retries_once(self):
+        class Request:
+            system_message = None
+            messages = []
+            model_settings = {}
+
+            def override(self, **values):
+                self.model_settings = values.get("model_settings", self.model_settings)
+                return self
+
+        async def exercise():
+            events = []
+            errors = []
+            guard = DiscoveryGuard(
+                make_probe("http://127.0.0.1/"),
+                [],
+                lambda kind, message: events.append((kind, message)),
+                lambda category, error, context: errors.append((category, type(error).__name__, context)),
+            )
+            calls = 0
+
+            async def handler(_request):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise RuntimeError("429 private-org; try again in 0.01s")
+                return "accepted"
+
+            result = await guard.awrap_model_call(Request(), handler)
+            return result, calls, events, errors
+
+        result, calls, events, errors = asyncio.run(exercise())
+        self.assertEqual(result, "accepted")
+        self.assertEqual(calls, 2)
+        self.assertEqual(errors[0][0], "provider-rate-limit")
+        self.assertEqual(errors[0][2]["attempt"], "1")
+        output = json.dumps(events)
+        self.assertIn("Provider rate limit", output)
+        self.assertNotIn("private-org", output)
+
     def test_react_action_requires_nonempty_short_summary(self):
         for summary in ("", "  \n", "x" * 241):
             with self.subTest(summary=summary), self.assertRaises(ValidationError):
@@ -186,8 +235,8 @@ class ValidationTests(unittest.TestCase):
         self.assertEqual(parse_host(xml, ["192.168.2.0/24"]), [])
 
     def test_redaction(self):
-        result = redact('token="abc123" password=xyz Bearer abc.def someone@example.com')
-        for secret in ("abc123", "xyz", "abc.def", "someone@example.com"):
+        result = redact('token="abc123" password=xyz Bearer abc.def someone@example.com org_01private')
+        for secret in ("abc123", "xyz", "abc.def", "someone@example.com", "org_01private"):
             self.assertNotIn(secret, result)
 
 
@@ -509,10 +558,32 @@ class StorageTests(unittest.TestCase):
             store = Store(root)
             store.save_finding(self.finding())
             store.event("probe", "A diagnostic event")
+            error_file = store.error("provider-rate-limit", RuntimeError("429 token=secret org_01private"))
+            self.assertTrue(error_file.exists())
             services_before = (root / "services.json").read_text(encoding="utf-8")
             store.clear_history()
             self.assertEqual(store.read(), {"findings": {}, "run": None, "events": []})
             self.assertEqual((root / "services.json").read_text(encoding="utf-8"), services_before)
+            self.assertFalse(error_file.exists())
+
+    def test_error_log_uses_err_extension_and_redacts_provider_secrets(self):
+        with TemporaryDirectory() as directory:
+            store = Store(Path(directory))
+            target = store.error(
+                "provider-rate-limit",
+                RuntimeError("429 org_01private token=supersecret; try again in 20.79s"),
+                {"provider": "groq", "model": "openai/gpt-oss-120b"},
+            )
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            self.assertEqual(target.suffix, ".err")
+            self.assertEqual(target.parent.name, "errors")
+            self.assertEqual(payload["category"], "provider-rate-limit")
+            self.assertEqual(payload["context"]["provider"], "groq")
+            self.assertIn("20.79s", payload["message"])
+            serialized = json.dumps(payload)
+            self.assertNotIn("org_01private", serialized)
+            self.assertNotIn("supersecret", serialized)
+            self.assertTrue(any(event["kind"] == "error_log" for event in store.read()["events"]))
 
     def test_background_end_to_end(self):
         with TemporaryDirectory() as directory, fixture() as url:
