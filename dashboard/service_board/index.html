@@ -47,7 +47,8 @@
     .hint { grid-column:1/-1; margin:4px 0 1px; color:rgba(255,255,255,.48); font:10px monospace; letter-spacing:.08em; text-align:center; }
     .empty { grid-column:1/-1; padding:56px; border:1px dashed rgba(255,255,255,.22); border-radius:22px; color:rgba(255,255,255,.65); text-align:center; }
     .overlay { position:fixed; inset:0; z-index:20; display:grid; place-items:center; padding:20px; background:rgba(5,12,22,.12); backdrop-filter:blur(6px) saturate(115%); }
-    .folder-panel { width:min(1100px,100%); max-height:700px; overflow:auto; padding:24px; border:1px solid rgba(255,255,255,.24); border-radius:27px; background:linear-gradient(145deg,rgba(255,255,255,.18),rgba(18,27,42,.58) 48%,rgba(255,255,255,.075)); box-shadow:inset 0 1px rgba(255,255,255,.28),0 34px 90px rgba(0,0,0,.35); backdrop-filter:blur(30px) saturate(170%); }
+    body.folder-open-desktop #board { visibility:hidden; }
+    .folder-panel { width:min(1100px,100%); max-height:min(700px,calc(100vh - 40px)); overflow:auto; padding:24px; border:1px solid rgba(255,255,255,.24); border-radius:27px; background:linear-gradient(145deg,rgba(255,255,255,.18),rgba(18,27,42,.58) 48%,rgba(255,255,255,.075)); box-shadow:inset 0 1px rgba(255,255,255,.28),0 34px 90px rgba(0,0,0,.35); backdrop-filter:blur(30px) saturate(170%); }
     .folder-head { display:flex; align-items:center; gap:12px; }
     .folder-name { min-width:0; flex:1; padding:10px 12px; color:#fff; border:1px solid rgba(255,255,255,.16); border-radius:10px; outline:none; background:rgba(255,255,255,.07); font-size:20px; font-weight:750; }
     .close { flex:0 0 auto; padding:10px 14px; color:white; border:1px solid rgba(255,255,255,.18); border-radius:10px; background:rgba(255,255,255,.08); cursor:pointer; }
@@ -76,13 +77,55 @@
   <script>
     const board = document.getElementById('board');
     let services = [], layout = {version:1,items:[]}, drag = null, openGroupId = null, moved = false;
-    let touchDrag = null, lastRenderSignature = null;
+    let touchDrag = null, lastRenderSignature = null, frameOverlaySnapshot = null;
     const send = (type, extra={}) => window.parent.postMessage({isStreamlitMessage:true,type,...extra}, '*');
     const ready = () => send('streamlit:componentReady',{apiVersion:1});
+    const parentViewportWidth = () => { try { return window.parent.innerWidth; } catch (_) { return window.innerWidth; } };
+    const desktopFolderOpen = () => Boolean(openGroupId) && parentViewportWidth() >= 700;
+    function setFrameOverlayMode(active) {
+      let frame, container;
+      try {
+        frame=window.frameElement;
+        container=frame?.closest('[data-testid="stElementContainer"]');
+      } catch (_) { return; }
+      if(!frame)return;
+      const properties=['position','inset','width','height','z-index','border'];
+      if(active && !frameOverlaySnapshot){
+        frameOverlaySnapshot={
+          frame,
+          frameStyles:Object.fromEntries(properties.map(property=>[property,[frame.style.getPropertyValue(property),frame.style.getPropertyPriority(property)]])),
+          container,
+          containerPosition:container ? [container.style.getPropertyValue('position'),container.style.getPropertyPriority('position')] : null,
+          containerZIndex:container ? [container.style.getPropertyValue('z-index'),container.style.getPropertyPriority('z-index')] : null,
+        };
+        frame.style.setProperty('position','fixed','important');
+        frame.style.setProperty('inset','0','important');
+        frame.style.setProperty('width','100vw','important');
+        frame.style.setProperty('height','100vh','important');
+        frame.style.setProperty('z-index','10000','important');
+        frame.style.setProperty('border','0','important');
+        if(container){
+          container.style.setProperty('position','relative','important');
+          container.style.setProperty('z-index','10000','important');
+        }
+      } else if(!active && frameOverlaySnapshot){
+        for(const [property,[value,priority]] of Object.entries(frameOverlaySnapshot.frameStyles)){
+          if(value)frameOverlaySnapshot.frame.style.setProperty(property,value,priority);
+          else frameOverlaySnapshot.frame.style.removeProperty(property);
+        }
+        if(frameOverlaySnapshot.container){
+          const restore=(property,snapshot)=>snapshot?.[0]
+            ? frameOverlaySnapshot.container.style.setProperty(property,snapshot[0],snapshot[1])
+            : frameOverlaySnapshot.container.style.removeProperty(property);
+          restore('position',frameOverlaySnapshot.containerPosition);
+          restore('z-index',frameOverlaySnapshot.containerZIndex);
+        }
+        frameOverlaySnapshot=null;
+      }
+    }
     const height = () => requestAnimationFrame(() => {
-      const mobile = window.innerWidth < 700;
-      const requested = openGroupId && !mobile ? 780 : Math.max(120, document.documentElement.scrollHeight + 2);
-      send('streamlit:setFrameHeight',{height:requested});
+      if(desktopFolderOpen())return;
+      send('streamlit:setFrameHeight',{height:Math.max(120,document.documentElement.scrollHeight+2)});
     });
     const value = () => send('streamlit:setComponentValue',{value:{type:'layout',layout,nonce:`${Date.now()}-${Math.random()}`},dataType:'json'});
     const byId = id => services.find(service => service.id === id);
@@ -275,12 +318,19 @@
     function render() {
       board.replaceChildren(); document.querySelector('.overlay')?.remove();
       if(openGroupId&&!findGroup(openGroupId))openGroupId=null;
+      setFrameOverlayMode(desktopFolderOpen());
       document.body.classList.toggle('folder-open',Boolean(openGroupId));
+      document.body.classList.toggle('folder-open-desktop',desktopFolderOpen());
       if(!layout.items.length) board.append(make('div','empty','No services yet. Add the first one from the sidebar.'));
       layout.items.forEach((item,index)=>{const slot=make('div','slot');slot.append(reorderZone(index));if(item.type==='service'){const service=byId(item.id);if(service)slot.append(serviceCard(service,index));}else slot.append(folderCard(item,index));board.append(slot);});
       if(layout.items.length) { board.append(reorderZone(layout.items.length,true)); board.append(make('div','hint','DROP ON A CARD EDGE TO REORDER · DROP IN THE CENTER TO CREATE A GROUP')); }
       if(openGroupId) renderOverlay(); height();
     }
+    window.addEventListener('resize',()=>{
+      setFrameOverlayMode(desktopFolderOpen());
+      document.body.classList.toggle('folder-open-desktop',desktopFolderOpen());
+      height();
+    });
     window.addEventListener('message', event => {
       if(event.data?.type!=='streamlit:render')return;
       const nextServices=Array.isArray(event.data.args.services)?event.data.args.services:[];
