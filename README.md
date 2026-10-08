@@ -34,6 +34,10 @@ The dashboard pairs a live service overview with a frosted-glass interface and a
 
 *19-second demo: reorder cards, create and rename a group, and drag a service back out. [Watch the MP4](readme-assets/dashboard-demo.mp4).*
 
+[![Watch the nighttime dashboard demo](readme-assets/dashboard-night-demo.gif)](readme-assets/dashboard-night-demo.mp4)
+
+*10-second nighttime demo: rearrange services inside a group and return them to the dashboard against the animated night backdrop. [Watch the night MP4](readme-assets/dashboard-night-demo.mp4).*
+
 ![Home Lab Command Center with the sidebar collapsed](readme-assets/dashboard-preview.png)
 
 *The main dashboard with the sidebar collapsed.*
