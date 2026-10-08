@@ -102,6 +102,14 @@ From the project root, after installing the requirements:
 python -m unittest discover -s tests -v
 ```
 
+The service-board browser regression test requires Node.js and `playwright`:
+
+```bash
+node tests/service_board_browser.cjs
+```
+
+Use `NODE_PATH` for an external Playwright installation and `CHROME_PATH` for an installed Chrome executable if needed. The test uses an isolated iframe with fixture data, without starting discovery or changing saved services. It checks stable iframe sizing, repeated render messages, recovery from a collapsed frame, and desktop/mobile group panels.
+
 Tests use a scripted `BaseChatModel` inside the real `create_agent` graph, so they need no Gemini key and incur no API charges. Offline tests run the production HTTP extraction, LangChain tool execution and middleware, verifier, background job and persistence with a simulated transport. An SDK-boundary test runs the full agent and real Gemini integration with a mocked HTTP response and checks that tool declarations remain enabled while SDK AFC is disabled. A separate live-localhost test runs a real fixture server and skips only if the environment forbids binding a socket.
 
 A real Gemini smoke test is manual: run `python -m devtools.fake_service --port 0`, paste the printed URL into the sidebar with no subnets selected, then run discovery. Repeat with the conflict and unknown scenarios. This checks the chosen model's behavior and quota as well as SDK connectivity.

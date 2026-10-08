@@ -12,18 +12,18 @@
     "id": "kali",
     "name": "Kali Linux",
     "kind": "SECURITY WORKBENCH",
-    "icon": "◒",
+    "icon": "▦",
     "description": "A focused security workspace for controlled diagnostics, testing, and network analysis.",
     "url": "http://192.168.1.30:6080",
-    "tone": "blue"
+    "tone": "violet"
   },
   {
     "id": "ff23adb4-9a20-4b83-9028-0948497ddd3e",
     "name": "AirTunes",
     "kind": "DISCOVERED SERVICE",
-    "icon": "◇",
+    "icon": "⊞",
     "description": "Discovered on the local network.",
     "url": "http://192.168.1.225:7000/",
-    "tone": "mint"
+    "tone": "blue"
   }
 ]

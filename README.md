@@ -30,6 +30,10 @@ Chrome, Firefox, and Edge use the day or night background video for the current 
 
 The dashboard pairs a live service overview with a frosted-glass interface and a gently animated Golden Gate backdrop.
 
+[![Watch the dashboard demo](readme-assets/dashboard-demo.gif)](readme-assets/dashboard-demo.mp4)
+
+*19-second demo: reorder cards, create and rename a group, and drag a service back out. [Watch the MP4](readme-assets/dashboard-demo.mp4).*
+
 ![Home Lab Command Center with the sidebar collapsed](readme-assets/dashboard-preview.png)
 
 *The main dashboard with the sidebar collapsed.*

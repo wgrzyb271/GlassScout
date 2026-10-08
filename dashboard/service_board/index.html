@@ -130,7 +130,12 @@
     }
     const height = () => requestAnimationFrame(() => {
       if(desktopFolderOpen())return;
-      send('streamlit:setFrameHeight',{height:Math.max(120,document.documentElement.scrollHeight+2)});
+      // The document is at least as tall as its iframe. Measuring scrollHeight
+      // and adding padding therefore grows the iframe on every resize event.
+      // Measure content instead, including the in-flow mobile group panel.
+      const contentBottom=Math.max(board.getBoundingClientRect().bottom,
+        document.querySelector('.overlay')?.getBoundingClientRect().bottom||0);
+      send('streamlit:setFrameHeight',{height:Math.max(120,Math.ceil(contentBottom+window.scrollY)+2)});
     });
     const value = () => send('streamlit:setComponentValue',{value:{type:'layout',layout,nonce:`${Date.now()}-${Math.random()}`},dataType:'json'});
     const byId = id => services.find(service => service.id === id);
@@ -383,7 +388,9 @@
       const nextServices=Array.isArray(event.data.args.services)?event.data.args.services:[];
       const nextLayout=event.data.args.layout&&Array.isArray(event.data.args.layout.items)?event.data.args.layout:{version:1,items:[]};
       const signature=JSON.stringify([nextServices,nextLayout]);
-      if(signature===lastRenderSignature)return;
+      // A full app rerun can reset the host frame even when the data is equal.
+      // Keep the DOM, but always re-send its size to the host.
+      if(signature===lastRenderSignature){height();return;}
       lastRenderSignature=signature; services=nextServices; layout=JSON.parse(JSON.stringify(nextLayout));
       render();
     });
