@@ -8,7 +8,7 @@ from html import escape
 import streamlit as st
 
 from dashboard.layout import load_layout, save_layout
-from dashboard.service_board import service_board
+from dashboard.service_board import service_board, service_board_key
 
 
 def _status_badge(state: bool | None) -> str:
@@ -53,16 +53,21 @@ def render_header(now: datetime, *, daytime: bool) -> None:
     )
 
 
+@st.fragment
 def render_service_grid(services: list[dict[str, str | bool | None]]) -> None:
+    """Save board interactions without rerunning the background or sidebar."""
     service_ids = [str(service["id"]) for service in services]
-    layout = load_layout(service_ids)
-    event = service_board(services, layout)
+    # Streamlit updates the widget's session state before either a full run or
+    # a fragment run. Save it before rendering so the component receives the
+    # latest layout in this same run, without requiring a scoped rerun.
+    event = st.session_state.get(service_board_key(services))
     if isinstance(event, dict) and event.get("type") == "layout" and isinstance(event.get("layout"), dict):
         nonce = str(event.get("nonce", ""))
         if nonce and nonce != st.session_state.get("service_board_event"):
-            st.session_state["service_board_event"] = nonce
             save_layout(event["layout"], service_ids)
-            st.rerun()
+            st.session_state["service_board_event"] = nonce
+    layout = load_layout(service_ids)
+    service_board(services, layout)
     st.markdown(
         '<div class="footerline"><span>◈ LOCAL INFRASTRUCTURE</span>'
         '<span>LIQUID GLASS / v2.0</span></div>',

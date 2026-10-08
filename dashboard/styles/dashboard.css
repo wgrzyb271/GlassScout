@@ -23,7 +23,54 @@ html, body, #root, .stApp, [data-testid="stAppViewContainer"] {
   color: var(--ink) !important;
 }
 
-/* Local photograph with a slow camera drift and a dark readability wash. */
+/* Safari uses the original photograph; other browsers use the muted video. */
+.app-static-bg,
+.app-video-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -3;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  background-position: center;
+  background-size: cover;
+  object-fit: cover !important;
+  object-position: center !important;
+  filter: brightness(.78) saturate(.84) contrast(1.08);
+}
+.app-static-bg { display: none; }
+.safari-browser .app-static-bg { display: block; }
+.safari-browser .app-video-bg { display: none; }
+/* Streamlit fades stale elements during reruns. Opacity on these wrappers
+   creates a stacking context, lifting fixed backgrounds above their dark wash.
+   Keep decorative layers and the transparent board at a stable opacity. */
+[data-testid="stElementContainer"]:has(.app-static-bg),
+[data-testid="stElementContainer"]:has(.app-video-bg),
+[data-testid="stElementContainer"]:has(iframe[title="dashboard.service_board.service_board"]) {
+  opacity: 1 !important;
+  transition: none !important;
+}
+.app-video-bg::-webkit-media-controls,
+.app-video-bg::-webkit-media-controls-panel,
+.app-video-bg::-webkit-media-controls-start-playback-button {
+  display: none !important;
+  -webkit-appearance: none;
+}
+[data-testid="stElementContainer"]:has(> .app-video-bg),
+[data-testid="stMarkdownContainer"]:has(> .app-video-bg),
+[data-testid="stElementContainer"]:has(> [data-testid="stMarkdownContainer"] > .app-static-bg),
+[data-testid="stMarkdownContainer"]:has(> .app-static-bg) {
+  height: 0 !important;
+  min-height: 0 !important;
+  overflow: visible !important;
+}
+[data-testid="stIFrame"],
+[data-testid="stElementContainer"]:has(> [data-testid="stIFrame"]) {
+  width: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+}
 .stApp::before, .stApp::after {
   content: "";
   position: fixed;
@@ -35,13 +82,10 @@ html, body, #root, .stApp, [data-testid="stAppViewContainer"] {
   background-image:
     linear-gradient(115deg, rgba(3,10,19,.80), rgba(5,15,30,.60) 47%, rgba(6,13,24,.76)),
     radial-gradient(ellipse at 13% 18%, rgba(var(--accent-rgb),.24), transparent 28%),
-    radial-gradient(ellipse at 84% 10%, rgba(55,126,190,.28), transparent 27%),
-    __BACKDROP_LAYER__;
+    radial-gradient(ellipse at 84% 10%, rgba(55,126,190,.28), transparent 27%);
   background-size: cover;
   background-position: center;
-  background-blend-mode: normal, screen, screen, normal;
-  filter: brightness(.78) saturate(.84) contrast(1.08);
-  animation: backdropDrift 24s cubic-bezier(.45,.05,.55,.95) infinite alternate;
+  background-blend-mode: normal, screen, screen;
 }
 .stApp::after {
   z-index: -1;
@@ -54,11 +98,6 @@ html, body, #root, .stApp, [data-testid="stAppViewContainer"] {
   mask-image: linear-gradient(to bottom, black, transparent 85%);
 }
 
-@keyframes backdropDrift {
-  0% { transform: translate3d(-1.8%,-1.2%,0) scale(1.035); filter: brightness(.72) saturate(.80) contrast(1.08); }
-  52% { transform: translate3d(1.7%,.8%,0) scale(1.09); filter: brightness(.82) saturate(.90) contrast(1.1) hue-rotate(5deg); }
-  100% { transform: translate3d(-.7%,1.6%,0) scale(1.055); filter: brightness(.76) saturate(.85) contrast(1.08); }
-}
 @keyframes glassGlow {
   0%, 100% { box-shadow: 0 8px 20px rgba(0,0,0,.18), 0 0 0 rgba(var(--accent-rgb),0); }
   50% { box-shadow: 0 9px 24px rgba(0,0,0,.22), 0 0 23px rgba(var(--accent-rgb),.26); }
@@ -154,9 +193,9 @@ h1 em { color: rgba(255,255,255,.52); font-style: normal; }
 .liquid-glass-card {
   position: relative; display: flex; min-height: 355px; flex-direction: column; overflow: hidden; padding: 1.45rem;
   border: 1px solid rgba(255,255,255,.18); border-radius: 22px;
-  background: linear-gradient(125deg,rgba(255,255,255,.13),rgba(255,255,255,.025) 45%,rgba(255,255,255,.055));
+  background: linear-gradient(125deg,rgba(255,255,255,.045),rgba(4,10,20,.08) 45%,rgba(255,255,255,.015));
   box-shadow: 0 25px 56px rgba(0,0,0,.31),inset 0 1px 0 rgba(255,255,255,.22);
-  backdrop-filter: blur(22px) saturate(150%); -webkit-backdrop-filter: blur(22px) saturate(150%);
+  backdrop-filter: blur(7px) saturate(125%); -webkit-backdrop-filter: blur(7px) saturate(125%);
   transition: transform .5s cubic-bezier(.16,1,.3,1),border-color .5s,box-shadow .5s;
 }
 .liquid-glass-card.amber { --accent: #f6b94a; --accent-rgb: 246,185,74; }
@@ -211,5 +250,5 @@ h1 em { color: rgba(255,255,255,.52); font-style: normal; }
   .dashboard-btn { padding: .7rem .75rem; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .stApp::before, .dashboard-btn, .eyebrow::before { animation: none !important; }
+  .dashboard-btn, .eyebrow::before { animation: none !important; }
 }

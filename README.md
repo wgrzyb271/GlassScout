@@ -12,7 +12,7 @@ Home Lab Command Center brings your local web interfaces together in one place. 
 - Check whether a service's network port accepts connections.
 - See the current time without refreshing the page.
 - Use the dashboard on desktop, tablet, or phone.
-- Enjoy a gently animated Golden Gate background with a frosted-glass interface.
+- Enjoy a time-aware, muted Golden Gate video background with a frosted-glass interface.
 - Run a Gemini-powered agent to discover local web services, automatically add verified results, and review uncertain matches.
 
 ## 🌗 Day and night appearance
@@ -24,7 +24,7 @@ The dashboard changes its accent color and day/night label automatically using t
 | 06:00–17:59 | Day Shift with a warm amber accent |
 | 18:00–05:59 | Night Shift with a soft violet accent |
 
-The background photo moves slowly with a subtle pan and zoom. If your device has **Reduce motion** enabled, the background animation is paused.
+Chrome, Firefox, and Edge use the day or night background video for the current time. Both files contain video only (their audio tracks were removed), play automatically, and loop continuously. Safari uses the original static Golden Gate photograph for reliable rendering without media controls.
 
 ## 🖥️ Dashboard preview
 

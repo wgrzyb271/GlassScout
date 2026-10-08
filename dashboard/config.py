@@ -5,7 +5,9 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DATA_FILE = ROOT_DIR / "data" / "services.json"
 LAYOUT_FILE = ROOT_DIR / "data" / "layout.json"
-BACKGROUND_IMAGE = ROOT_DIR / "assets" / "GoldenGate_Day_optimized.jpg"
+DAY_BACKGROUND_VIDEO = ROOT_DIR / "assets" / "day.mp4"
+NIGHT_BACKGROUND_VIDEO = ROOT_DIR / "assets" / "night.mp4"
+SAFARI_BACKGROUND_IMAGE = ROOT_DIR / "assets" / "GoldenGate_Day_optimized.jpg"
 STYLE_FILE = Path(__file__).with_name("styles") / "dashboard.css"
 TONES = ("amber", "violet", "blue", "mint")
 ICONS = {

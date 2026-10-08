@@ -6,7 +6,7 @@
     "icon": "⊞",
     "description": "A dedicated Windows workspace isolated inside the local compute environment.",
     "url": "http://192.168.1.20:8000",
-    "tone": "mint"
+    "tone": "amber"
   },
   {
     "id": "kali",
@@ -15,7 +15,7 @@
     "icon": "◒",
     "description": "A focused security workspace for controlled diagnostics, testing, and network analysis.",
     "url": "http://192.168.1.30:6080",
-    "tone": "mint"
+    "tone": "blue"
   },
   {
     "id": "ff23adb4-9a20-4b83-9028-0948497ddd3e",

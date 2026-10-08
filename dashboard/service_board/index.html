@@ -14,13 +14,18 @@
     .drop-zone { position:absolute; z-index:5; top:-8px; right:0; left:0; height:16px; border-radius:99px; transition:.16s; }
     .drop-zone.active { background:rgba(255,255,255,.34); box-shadow:0 0 18px rgba(125,211,252,.35); }
     .drop-zone.end-zone { position:relative; grid-column:1/-1; top:auto; height:18px; }
-    .card,.folder { --tone:#60a5fa; --tone-rgb:96,165,250; position:relative; min-height:355px; overflow:hidden; overflow-wrap:anywhere; padding:23px; border:1px solid rgba(255,255,255,.18); border-radius:22px; background:linear-gradient(125deg,rgba(255,255,255,.13),rgba(255,255,255,.025) 45%,rgba(255,255,255,.055)); box-shadow:0 25px 56px rgba(0,0,0,.31),inset 0 1px rgba(255,255,255,.22); backdrop-filter:blur(22px) saturate(150%); transition:transform .22s ease,border-color .22s ease,opacity .2s; touch-action:pan-y; }
+    .card,.folder { --tone:#60a5fa; --tone-rgb:96,165,250; position:relative; min-height:355px; overflow:hidden; overflow-wrap:anywhere; padding:23px; border:1px solid rgba(255,255,255,.18); border-radius:22px; background:linear-gradient(125deg,rgba(255,255,255,.045),rgba(4,10,20,.08) 45%,rgba(255,255,255,.015)); box-shadow:0 25px 56px rgba(0,0,0,.24),inset 0 1px rgba(255,255,255,.16); backdrop-filter:blur(7px) saturate(125%); -webkit-backdrop-filter:blur(7px) saturate(125%); transition:transform .22s ease,border-color .22s ease,opacity .2s; touch-action:pan-y; -webkit-user-drag:none; user-select:none; }
     .amber { --tone:#f6b94a; --tone-rgb:246,185,74; } .violet { --tone:#a78bfa; --tone-rgb:167,139,250; } .blue { --tone:#60a5fa; --tone-rgb:96,165,250; } .mint { --tone:#5eead4; --tone-rgb:94,234,212; }
     .card::before,.folder::before { position:absolute; top:-52px; right:-42px; width:180px; height:140px; content:""; border-radius:50%; background:radial-gradient(circle,rgba(var(--tone-rgb),.3),transparent 68%); }
-    .slot:hover>.card,.slot:hover>.folder,.group-service:hover { transform:translateY(-3px); border-color:rgba(255,255,255,.36); }
+    body:not(.is-dragging) .slot:hover>.card,body:not(.is-dragging) .slot:hover>.folder,body:not(.is-dragging) .group-service:hover { transform:translateY(-3px); border-color:rgba(255,255,255,.36); }
     .dragging { opacity:.42; transform:none!important; pointer-events:none; }
-    .drag-ghost { position:fixed!important; z-index:9999!important; margin:0!important; opacity:.96!important; pointer-events:none!important; transform:translateY(-10px) scale(1.025) rotate(.35deg)!important; transform-origin:center; box-shadow:0 38px 82px rgba(0,0,0,.52),0 0 42px rgba(var(--tone-rgb),.24),inset 0 1px rgba(255,255,255,.3)!important; transition:none!important; }
+    .drag-ghost { position:fixed!important; z-index:9999!important; top:0!important; left:0!important; margin:0!important; opacity:.98!important; pointer-events:none!important; background:linear-gradient(135deg,rgba(28,35,50,.98),rgba(8,16,29,.97))!important; box-shadow:0 22px 52px rgba(0,0,0,.46),0 0 22px rgba(var(--tone-rgb),.14),inset 0 1px rgba(255,255,255,.2)!important; backdrop-filter:none!important; -webkit-backdrop-filter:none!important; contain:paint; isolation:isolate; will-change:transform; transition:none!important; }
+    .drag-ghost::before { opacity:.28!important; }
+    .drag-ghost-compact { display:flex; align-items:center; gap:12px; padding:11px 14px; border:1px solid rgba(255,255,255,.3); border-radius:16px; }
+    .drag-ghost-icon { display:grid; width:34px; height:34px; flex:0 0 auto; place-items:center; color:var(--tone); border:1px solid rgba(255,255,255,.2); border-radius:10px; background:rgba(255,255,255,.08); font-size:19px; }
+    .drag-ghost-label { overflow:hidden; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
     body.is-dragging,body.is-dragging * { cursor:grabbing!important; user-select:none!important; }
+    body.is-dragging .card:not(.drag-ghost),body.is-dragging .folder:not(.drag-ghost) { transition:none!important; }
     .drop-target { border-color:var(--tone)!important; box-shadow:0 0 0 2px rgba(var(--tone-rgb),.42),0 25px 56px rgba(0,0,0,.31)!important; }
     .reorder-before { box-shadow:inset 0 5px #7dd3fc,0 25px 56px rgba(0,0,0,.31)!important; }
     .reorder-after { box-shadow:inset 0 -5px #7dd3fc,0 25px 56px rgba(0,0,0,.31)!important; }
@@ -37,7 +42,7 @@
     .endpoint { position:relative; overflow-wrap:anywhere; padding-top:14px; border-top:1px solid rgba(255,255,255,.12); color:rgba(255,255,255,.65); font:10px/1.35 monospace; }
     .open { position:absolute; right:23px; bottom:22px; left:23px; z-index:6; display:flex; justify-content:space-between; padding:12px 14px; color:white; border:1px solid rgba(255,255,255,.22); border-radius:11px; background:rgba(255,255,255,.1); font-size:12px; font-weight:700; text-decoration:none; touch-action:manipulation; }
     .open span { color:var(--tone); }
-    .folder { cursor:pointer; display:flex; min-height:355px; flex-direction:column; justify-content:center; background:linear-gradient(135deg,rgba(255,255,255,.17),rgba(255,255,255,.035) 48%,rgba(167,139,250,.09)); backdrop-filter:blur(28px) saturate(175%); }
+    .folder { cursor:pointer; display:flex; min-height:355px; flex-direction:column; justify-content:center; background:linear-gradient(135deg,rgba(255,255,255,.05),rgba(4,10,20,.07) 48%,rgba(167,139,250,.025)); backdrop-filter:blur(8px) saturate(130%); -webkit-backdrop-filter:blur(8px) saturate(130%); }
     .folder-grid { position:relative; display:grid; width:218px; min-height:158px; margin:0 auto; padding:15px; grid-template-columns:repeat(2,minmax(0,1fr)); gap:11px; border:1px solid rgba(255,255,255,.26); border-radius:31px; background:linear-gradient(145deg,rgba(255,255,255,.16),rgba(255,255,255,.045)); box-shadow:inset 0 1px rgba(255,255,255,.3),0 18px 38px rgba(0,0,0,.22); backdrop-filter:blur(20px) saturate(180%); cursor:grab; touch-action:none; }
     .folder-entry { display:grid; min-width:0; justify-items:center; gap:5px; }
     .folder-icon { display:grid; width:58px; height:58px; place-items:center; border:1px solid rgba(255,255,255,.16); border-radius:15px; background:rgba(255,255,255,.1); color:var(--tone); box-shadow:inset 0 1px rgba(255,255,255,.18),0 0 20px rgba(var(--tone-rgb),.15); font-size:25px; }
@@ -155,7 +160,13 @@
       return previousGroup;
     }
     function topIndexFor(id) { return layout.items.findIndex(item => item.id === id); }
-    function commit() { cleanupGroups(); render(); value(); }
+    function commit() {
+      cleanupGroups();
+      // The board already displays this layout. A server acknowledgement must
+      // not rebuild the glass surfaces for a second time after each drop.
+      lastRenderSignature=JSON.stringify([services,layout]);
+      render(); value();
+    }
 
     function make(tag, className, text) {
       const el=document.createElement(tag); if(className) el.className=className; if(text!==undefined) el.textContent=escapeText(text); return el;
@@ -167,15 +178,27 @@
     function dropIntent(el,x,y,horizontal=false) {
       const rect=el.getBoundingClientRect();
       const ratio=horizontal?(x-rect.left)/Math.max(1,rect.width):(y-rect.top)/Math.max(1,rect.height);
-      return ratio<.28?'before':ratio>.72?'after':'center';
+      return ratio<.35?'before':ratio>.65?'after':'center';
+    }
+    function horizontalGroup(el) {
+      const grid=el.closest('.group-grid');
+      return Boolean(grid&&getComputedStyle(grid).gridTemplateColumns.split(' ').length>1);
+    }
+    function groupDropIntent(el,payload,x,y) {
+      const where=dropIntent(el,x,y,horizontalGroup(el));
+      if(where!=='center')return where;
+      // Dropping on the centre moves into the target's position in either
+      // direction, rather than always inserting after it.
+      const members=findGroup(el.dataset.groupId)?.service_ids||[];
+      return members.indexOf(payload?.id)<members.indexOf(el.dataset.serviceId)?'after':'before';
     }
     function touchTargetAt(x,y) { return document.elementsFromPoint(x,y).find(node=>node.dataset?.dropRole); }
     function markTouchTarget(target,x,y) {
       clearDropStyles(); if(!target)return;
       const role=target.dataset.dropRole;
       if(role==='extract'||role==='reorder') { target.classList.add('active'); return; }
-      const horizontal=role==='service'||role==='folder'?horizontalBoard():false;
-      const where=dropIntent(target,x,y,horizontal);
+      const horizontal=role==='group-service'?horizontalGroup(target):horizontalBoard();
+      const where=role==='group-service'?groupDropIntent(target,drag,x,y):dropIntent(target,x,y,horizontal);
       if(horizontal&&where!=='center')target.classList.add('reorder-horizontal');
       target.classList.add(where==='center'?'drop-target':`reorder-${where}`);
     }
@@ -189,7 +212,7 @@
       if(role==='reorder') { moveToIndex(payload,Number(target.dataset.index)); return; }
       if(role==='extract') { removeFromGroup(payload,target.dataset.groupId); return; }
       if(role==='group-service') {
-        const where=dropIntent(target,x,y,false);
+        const where=groupDropIntent(target,payload,x,y);
         moveInsideGroup(payload,target.dataset.groupId,target.dataset.serviceId,where!=='before'); return;
       }
       const index=Number(target.dataset.index), where=dropIntent(target,x,y,horizontalBoard());
@@ -200,21 +223,43 @@
     }
     function createDragGhost(state,event) {
       if(event.pointerType!=='mouse')return;
+      if(state.payload.kind==='group-service') {
+        const service=byId(state.payload.id);
+        const ghost=make('div',`drag-ghost drag-ghost-compact ${service?.tone||'blue'}`);
+        ghost.append(make('span','drag-ghost-icon',service?.icon||'◈'),make('strong','drag-ghost-label',service?.name||'Service'));
+        state.ghostWidth=Math.min(250,window.innerWidth-32); state.ghostHeight=58;
+        state.offsetX=state.ghostWidth/2; state.offsetY=29; state.ghost=ghost;
+        Object.assign(ghost.style,{width:`${state.ghostWidth}px`,height:'58px'});
+        document.body.append(ghost); document.body.classList.add('is-dragging'); moveDragGhost(state,event);
+        return;
+      }
       const rect=state.el.getBoundingClientRect(),ghost=state.el.cloneNode(true);
       ghost.classList.remove('dragging','drop-target','reorder-before','reorder-after','reorder-horizontal'); ghost.classList.add('drag-ghost');
       ghost.removeAttribute('data-drop-role'); ghost.querySelectorAll('[id]').forEach(node=>node.removeAttribute('id'));
-      Object.assign(ghost.style,{width:`${rect.width}px`,height:`${rect.height}px`,left:`${rect.left}px`,top:`${rect.top}px`});
-      state.offsetX=state.startX-rect.left; state.offsetY=state.startY-rect.top; state.ghostWidth=rect.width; state.ghostHeight=rect.height; state.ghost=ghost; document.body.append(ghost); document.body.classList.add('is-dragging');
+      ghost.querySelectorAll('a,button,input,textarea,select').forEach(node=>node.setAttribute('tabindex','-1'));
+      Object.assign(ghost.style,{width:`${rect.width}px`,height:`${rect.height}px`});
+      state.offsetX=state.startX-rect.left; state.offsetY=state.startY-rect.top; state.ghostWidth=rect.width; state.ghostHeight=rect.height; state.ghost=ghost;
+      document.body.append(ghost); document.body.classList.add('is-dragging'); moveDragGhost(state,event);
     }
     function moveDragGhost(state,event) {
       if(!state.ghost)return;
-      const bounds=board.getBoundingClientRect(),padding=16;
+      const bounds=state.payload.kind==='group-service'
+        ? {left:0,top:0,right:window.innerWidth,bottom:window.innerHeight}
+        : board.getBoundingClientRect(),padding=16;
       const minLeft=Math.max(padding,bounds.left+padding),maxLeft=Math.max(minLeft,Math.min(window.innerWidth-state.ghostWidth-padding,bounds.right-state.ghostWidth-padding));
       const minTop=Math.max(padding,bounds.top+padding),maxTop=Math.max(minTop,Math.min(window.innerHeight-state.ghostHeight-padding,bounds.bottom-state.ghostHeight-padding));
       const left=Math.min(maxLeft,Math.max(minLeft,event.clientX-state.offsetX)),top=Math.min(maxTop,Math.max(minTop,event.clientY-state.offsetY));
-      state.ghost.style.left=`${left}px`; state.ghost.style.top=`${top}px`;
+      state.ghost.style.transform=`translate3d(${left}px,${top-8}px,0)`;
     }
     function removeDragGhost(state) { state?.ghost?.remove(); document.body.classList.remove('is-dragging'); }
+    function endPointerDrag(event,cancelled=false) {
+      if(!touchDrag||(event?.pointerId!==undefined&&touchDrag.pointerId!==event.pointerId))return;
+      const state=touchDrag,active=state.active,payloadValue=state.payload;
+      if(active&&!cancelled){event?.preventDefault?.();const target=touchTargetAt(event.clientX,event.clientY);clearDropStyles();removeDragGhost(state);finishTouchDrop(payloadValue,target,event.clientX,event.clientY);}
+      else { clearDropStyles(); removeDragGhost(state); }
+      try { state.el.releasePointerCapture?.(state.pointerId); } catch (_) {}
+      state.el.classList.remove('dragging'); drag=null; touchDrag=null; setTimeout(()=>moved=false,active?300:0);
+    }
     function enablePointerDrag(el,payload) {
       el.addEventListener('pointerdown',event=>{
         if(event.button!==0||event.target.closest('a,button,input,textarea,select'))return;
@@ -230,13 +275,9 @@
         }
         event.preventDefault(); moveDragGhost(touchDrag,event); markTouchTarget(touchTargetAt(event.clientX,event.clientY),event.clientX,event.clientY);
       });
-      const finish=event=>{
-        if(!touchDrag||touchDrag.el!==el||touchDrag.pointerId!==event.pointerId)return;
-        const state=touchDrag,active=state.active,payloadValue=state.payload;
-        if(active){event.preventDefault();const target=touchTargetAt(event.clientX,event.clientY);clearDropStyles();removeDragGhost(state);finishTouchDrop(payloadValue,target,event.clientX,event.clientY);}
-        el.classList.remove('dragging'); drag=null; touchDrag=null; setTimeout(()=>moved=false,active?300:0);
-      };
-      el.addEventListener('pointerup',finish); el.addEventListener('pointercancel',event=>{if(touchDrag?.el===el){removeDragGhost(touchDrag);el.classList.remove('dragging');clearDropStyles();drag=null;touchDrag=null;moved=false;}});
+      el.addEventListener('pointerup',event=>endPointerDrag(event));
+      el.addEventListener('pointercancel',event=>endPointerDrag(event,true));
+      el.addEventListener('lostpointercapture',event=>{if(touchDrag?.el===el)endPointerDrag(event,true);});
     }
     function setDrag(el, payload) {
       el.draggable=false;
@@ -249,8 +290,10 @@
     }
     function positionalDrop(el, center, before, after, boardItem=false) {
       const clear=()=>el.classList.remove('drop-target','reorder-before','reorder-after','reorder-horizontal');
-      const horizontal=()=>boardItem&&horizontalBoard();
-      const intent=event=>dropIntent(el,event.clientX,event.clientY,horizontal());
+      const horizontal=()=>boardItem?horizontalBoard():horizontalGroup(el);
+      const intent=event=>el.dataset.dropRole==='group-service'
+        ? groupDropIntent(el,drag,event.clientX,event.clientY)
+        : dropIntent(el,event.clientX,event.clientY,horizontal());
       el.addEventListener('dragover',event=>{if(!drag)return;event.preventDefault();event.stopPropagation();clear();const where=intent(event);if(horizontal()&&where!=='center')el.classList.add('reorder-horizontal');el.classList.add(where==='center'?'drop-target':`reorder-${where}`);});
       el.addEventListener('dragleave',clear);
       el.addEventListener('drop',event=>{if(!drag)return;event.preventDefault();event.stopPropagation();const where=intent(event);clear();(where==='before'?before:where==='after'?after:center)(drag);});
@@ -331,6 +374,10 @@
       document.body.classList.toggle('folder-open-desktop',desktopFolderOpen());
       height();
     });
+    window.addEventListener('pointerup',event=>endPointerDrag(event),true);
+    window.addEventListener('pointercancel',event=>endPointerDrag(event,true),true);
+    window.addEventListener('blur',()=>endPointerDrag(undefined,true));
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)endPointerDrag(undefined,true);});
     window.addEventListener('message', event => {
       if(event.data?.type!=='streamlit:render')return;
       const nextServices=Array.isArray(event.data.args.services)?event.data.args.services:[];

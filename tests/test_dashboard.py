@@ -14,6 +14,40 @@ except ImportError:
 
 @unittest.skipIf(AppTest is None, "Streamlit is not installed in this test interpreter")
 class DashboardTests(unittest.TestCase):
+    def test_board_event_on_full_run_saves_before_render_without_rerun(self):
+        from dashboard import components, layout
+        from dashboard.service_board import service_board_key
+
+        script = '''
+import streamlit as st
+from dashboard.components import render_service_grid
+st.session_state['full_runs'] = st.session_state.get('full_runs', 0) + 1
+render_service_grid([{'id': 'a'}, {'id': 'b'}])
+'''
+        services = [{"id": "a"}, {"id": "b"}]
+        reordered = {"version": 1, "items": [
+            {"type": "service", "id": "b"}, {"type": "service", "id": "a"},
+        ]}
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "layout.json"
+            with patch.object(components, "load_layout", side_effect=lambda ids: layout.load_layout(ids, path)), patch.object(
+                components, "save_layout", side_effect=lambda value, ids: layout.save_layout(value, ids, path)
+            ) as save, patch.object(components, "service_board") as board:
+                app = AppTest.from_string(script).run()
+                # Reproduce a new component event arriving during a full run.
+                app.session_state[service_board_key(services)] = {
+                    "type": "layout", "nonce": "drop-1", "layout": reordered,
+                }
+                app.run()
+                self.assertFalse(app.exception, [e.message for e in app.exception])
+                self.assertEqual(app.session_state["full_runs"], 2)
+                self.assertEqual(json.loads(path.read_text()), reordered)
+                self.assertEqual(board.call_args.args[1], reordered)
+                self.assertEqual(save.call_count, 1)
+                app.run()
+                self.assertFalse(app.exception)
+                self.assertEqual(save.call_count, 1)
+
     def test_service_board_key_changes_with_service_membership(self):
         from dashboard import service_board
 
