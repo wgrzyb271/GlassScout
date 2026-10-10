@@ -49,9 +49,9 @@ class ServiceBudget:
         self.check()
         if self.model_calls >= self.run.settings.model_calls:
             raise LimitReached("Service model call limit reached")
-        if self.run.model_calls >= self.run.settings.total_model_calls:
+        if not self.run.settings.unlimited_run and self.run.model_calls >= self.run.settings.total_model_calls:
             raise LimitReached("Run model call limit reached")
-        if self.run.input_chars + chars > self.run.settings.input_chars:
+        if not self.run.settings.unlimited_run and self.run.input_chars + chars > self.run.settings.input_chars:
             raise LimitReached("Run input budget reached")
         self.model_calls += 1
         self.run.model_calls += 1

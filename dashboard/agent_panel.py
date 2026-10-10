@@ -178,7 +178,7 @@ def render_discovery_dialog() -> None:
             help="Before subnet scanning, checks each saved TCP address and skips repeated web/AI analysis for an already reachable IP and port.",
         )
 
-    st.caption("Full network scan uses all TCP ports and runs until every saved port batch finishes or you stop it.")
+    st.caption("Full network scan uses all TCP ports, waits for AI quota resets, and runs until every port batch and discovered address finishes or you stop it.")
     start_col, full_col, cancel_col = st.columns(3)
     start = start_col.button("Start discovery", type="primary", use_container_width=True, disabled=job.running)
     full_scan = full_col.button(

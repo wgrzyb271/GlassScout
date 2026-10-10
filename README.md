@@ -193,10 +193,13 @@ discarded, but real HTTP panelsâ€”including printer pages on HTTP, HTTPS or IPPâ
 still kept for identification.
 
 Use **Scan entire network** for a one-click exhaustive scan of TCP ports
-`1-65535` on the selected LANs. This mode has no scan-time cutoff and continues
-through every persisted port batch until it finishes or **Stop scan** is selected.
-Provider quotas and the bounded per-service checks still apply; any unfinished
-service-address queue remains resumable. Port scanning and service identification
+`1-65535` on the selected LANs. This mode has no scan-time, endpoint, or aggregate
+model-input cutoff and continues through every persisted port batch and discovered
+address until it finishes or **Stop scan** is selected. When the provider reports
+an AI rate limit, the run waits for the advertised reset and retries the same
+address. Per-service safety bounds still apply. A non-quota provider failure does
+not stop TCP coverage; its unfinished service-address queue remains resumable.
+Port scanning and service identification
 run as a producer/consumer pipeline: newly discovered addresses are checked and
 cards are saved while Nmap continues with later batches. The dashboard shows
 separate live progress bars for completed port batches and checked addresses.

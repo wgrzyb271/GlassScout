@@ -19,7 +19,7 @@ from discovery.budget import Budget, LimitReached
 from discovery.models import Finding, RunRecord, Settings, now
 from discovery.network import chunk_ports, discover_mdns, scan_tcp
 from discovery.probe import Probe, resolve_local
-from discovery.provider import create_model, ModelUnavailable
+from discovery.provider import create_model, ModelUnavailable, ProviderRateLimited
 from discovery.storage import Store
 
 
@@ -135,7 +135,7 @@ class JobManager:
             nonlocal queue_warning_sent
             if endpoint in known_endpoints or endpoint in processed_endpoints:
                 return
-            if len(pending) >= 512:
+            if not settings.unlimited_run and len(pending) >= 512:
                 if not queue_warning_sent:
                     queue_warning_sent = True
                     self.warning("Resume queue capped at 512 URLs; scan a smaller subnet for complete coverage.")
@@ -222,6 +222,29 @@ class JobManager:
         consumer_error: BaseException | None = None
         internal_stop = False
         processed = 0
+
+        async def wait_for_quota(seconds: float, endpoint: str) -> None:
+            wait_until = monotonic() + seconds
+            self.store.event("provider_wait", f"AI quota exhausted; retrying after the provider reset ({int(seconds + .999)} seconds).")
+            last_bucket = None
+            while True:
+                budget.check()
+                remaining = max(0, wait_until - monotonic())
+                if remaining <= 0:
+                    break
+                # Persist occasionally so disconnected browsers and other users
+                # can see why the otherwise-unbounded scan is still running.
+                bucket = int(remaining // 30)
+                if bucket != last_bucket:
+                    last_bucket = bucket
+                    self.update(
+                        phase="Waiting for AI quota reset",
+                        detail=f"Retrying {endpoint} in {int(remaining + .999)} seconds",
+                        model_calls=budget.model_calls,
+                        input_chars=budget.input_chars,
+                    )
+                await asyncio.sleep(min(1, remaining))
+
         try:
             while True:
                 endpoint = await endpoint_queue.get()
@@ -229,17 +252,25 @@ class JobManager:
                     break
                 if not isinstance(endpoint, str):
                     continue
-                if processed >= settings.max_endpoints:
+                if not settings.unlimited_run and processed >= settings.max_endpoints:
                     if not endpoint_limit_sent:
                         endpoint_limit_sent = True
                         self.warning(f"Endpoint limit reached: {settings.max_endpoints} checked; remaining URLs saved for resume.")
                     continue
                 budget.check()
                 self.update(detail=endpoint)
-                await self._identify_endpoint(
-                    endpoint, settings, budget, model,
-                    successful_transports,
-                )
+                while True:
+                    try:
+                        await self._identify_endpoint(
+                            endpoint, settings, budget, model,
+                            successful_transports,
+                        )
+                        break
+                    except ProviderRateLimited as exc:
+                        if not settings.unlimited_run:
+                            raise
+                        await wait_for_quota(exc.retry_after, endpoint)
+                        self.update(phase="Scanning and identifying services", detail=endpoint)
                 processed += 1
                 processed_endpoints.add(endpoint)
                 if endpoint in pending:
@@ -250,12 +281,16 @@ class JobManager:
                     model_calls=budget.model_calls,
                     input_chars=budget.input_chars,
                 )
-                if budget.model_calls >= settings.total_model_calls or budget.input_chars >= settings.input_chars:
+                if not settings.unlimited_run and (budget.model_calls >= settings.total_model_calls or budget.input_chars >= settings.input_chars):
                     raise LimitReached("Run model/input budget reached; partial results saved")
         except BaseException as exc:
             consumer_error = exc
             internal_stop = not self.stop_event.is_set()
-            self.stop_event.set()
+            # A full network scan must finish port coverage even when service
+            # identification fails for a non-quota provider problem. Keep the
+            # discovered addresses persisted for a later resume.
+            if not settings.unlimited_run:
+                self.stop_event.set()
         finally:
             if scanner is not None:
                 await scanner

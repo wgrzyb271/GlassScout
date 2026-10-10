@@ -7,6 +7,14 @@ class ModelUnavailable(Exception):
     """A provider-wide failure: pause the run instead of retrying every host."""
 
 
+class ProviderRateLimited(ModelUnavailable):
+    """The provider supplied (or needs) a delay before another model call."""
+
+    def __init__(self, retry_after: float):
+        self.retry_after = max(0.2, float(retry_after))
+        super().__init__("Provider rate limit reached; waiting for quota reset.")
+
+
 def create_gemini_model(api_key: str, model: str):
     """Return a standard LangChain model, not a custom reasoner adapter."""
     from langchain_google_genai import ChatGoogleGenerativeAI

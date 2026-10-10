@@ -26,7 +26,7 @@ from discovery.middleware import DiscoveryGuard, _is_rate_limit, _is_transient_p
 from discovery.models import EvidenceRef, FetchServiceInput, Finding, FinishServiceInput, Observation, Proposal, RunRecord, Settings, clean_url
 from discovery.network import chunk_ports, parse_host, scan_tcp
 from discovery.probe import Probe, redact, resolve_local
-from discovery.provider import create_gemini_model, ModelUnavailable
+from discovery.provider import create_gemini_model, ModelUnavailable, ProviderRateLimited
 from discovery.runner import JobManager
 from discovery.storage import Store
 from discovery.tools import service_tools
@@ -197,6 +197,15 @@ class ValidationTests(unittest.TestCase):
         output = json.dumps(events)
         self.assertIn("Provider rate limit", output)
         self.assertNotIn("private-org", output)
+
+    def test_unlimited_run_has_no_aggregate_model_or_input_cutoff(self):
+        budget = Budget(Settings(
+            seed_urls=["http://127.0.0.1/"], unlimited_run=True,
+            total_model_calls=1, input_chars=1000,
+        ), Event())
+        budget.service().model(600)
+        budget.service().model(600)
+        self.assertEqual((budget.model_calls, budget.input_chars), (2, 1200))
 
     def test_react_action_requires_nonempty_short_summary(self):
         for summary in ("", "  \n", "x" * 241):
@@ -778,6 +787,69 @@ class ScannerTests(unittest.TestCase):
             self.assertEqual(job.snapshot().status, "completed")
             self.assertEqual(job.snapshot().scan_batches_completed, 1)
             self.assertEqual(job.snapshot().added, 1)
+
+    def test_full_scan_waits_for_quota_and_retries_same_endpoint(self):
+        attempts = []
+
+        def scan(_budget, found, _progress, *, ports):
+            found("127.0.0.1", 48765)
+
+        async def identify(endpoint, *_args, **_kwargs):
+            attempts.append(endpoint)
+            if len(attempts) == 1:
+                raise ProviderRateLimited(.01)
+
+        with TemporaryDirectory() as directory, \
+                patch("discovery.runner.shutil.which", return_value="/test/nmap"), \
+                patch("discovery.runner.scan_tcp", side_effect=scan), \
+                patch.object(JobManager, "_identify_endpoint", side_effect=identify):
+            job = JobManager(Path(directory))
+            job.start(Settings(
+                networks=["127.0.0.1/32"], ports="48765", mdns=False,
+                unlimited_run=True, max_endpoints=1, total_model_calls=1,
+                input_chars=1000,
+            ), "", model=ScriptedModel())
+            job.thread.join(5)
+            events = job.store.read()["events"]
+
+        self.assertFalse(job.running)
+        self.assertEqual(job.snapshot().status, "completed")
+        self.assertEqual(job.snapshot().processed, 2)
+        self.assertEqual(attempts[0], attempts[1])
+        self.assertTrue(any(event["kind"] == "provider_wait" for event in events))
+
+    def test_provider_failure_does_not_interrupt_full_port_coverage(self):
+        identification_failed = Event()
+        scanned = []
+
+        def scan(budget, found, _progress, *, ports):
+            scanned.append(ports)
+            if len(scanned) == 1:
+                found("127.0.0.1", 48765)
+                if not identification_failed.wait(2):
+                    raise AssertionError("identification failure was not observed")
+                budget.check()
+
+        async def identify(*_args, **_kwargs):
+            identification_failed.set()
+            raise ModelUnavailable("provider unavailable")
+
+        with TemporaryDirectory() as directory, \
+                patch("discovery.runner.shutil.which", return_value="/test/nmap"), \
+                patch("discovery.runner.scan_tcp", side_effect=scan), \
+                patch.object(JobManager, "_identify_endpoint", side_effect=identify):
+            job = JobManager(Path(directory))
+            job.start(Settings(
+                networks=["127.0.0.1/32"], ports="1-2048", mdns=False,
+                unlimited_run=True,
+            ), "", model=ScriptedModel())
+            job.thread.join(5)
+
+        self.assertFalse(job.running)
+        self.assertEqual(job.snapshot().status, "partial")
+        self.assertEqual(scanned, ["1-1024", "1025-2048"])
+        self.assertEqual(job.snapshot().pending_port_ranges, [])
+        self.assertEqual(job.snapshot().scan_batches_completed, 2)
 
     def test_cancel_keeps_completed_hosts_and_terminates_process(self):
         budget = Budget(Settings(networks=["192.168.1.0/24"]), Event())

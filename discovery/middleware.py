@@ -15,7 +15,7 @@ from langchain_core.tools import BaseTool
 from discovery.budget import LimitReached
 from discovery.models import Finding, FinishServiceInput, Observation
 from discovery.probe import Probe, observation_for_model, redact
-from discovery.provider import ModelUnavailable
+from discovery.provider import ModelUnavailable, ProviderRateLimited
 
 
 def _status_code(exc: Exception) -> int | None:
@@ -40,7 +40,8 @@ def _is_transient_provider_error(exc: Exception) -> bool:
 
 
 def _is_rate_limit(exc: Exception) -> bool:
-    return _status_code(exc) == 429 or "429" in str(exc) or "RATE LIMIT" in str(exc).upper()
+    message = str(exc).upper()
+    return _status_code(exc) == 429 or "429" in message or "RATE LIMIT" in message or "RESOURCE_EXHAUSTED" in message
 
 
 def _retry_after_seconds(exc: Exception, fallback: float) -> float:
@@ -151,13 +152,18 @@ class DiscoveryGuard(AgentMiddleware):
                 except Exception as exc:
                     rate_limited = _is_rate_limit(exc)
                     self.log_error("provider-rate-limit" if rate_limited else "provider-error", exc, attempt + 1)
-                    if not _is_transient_provider_error(exc) or attempt == 2:
+                    if not _is_transient_provider_error(exc):
                         raise
-                    delay = _retry_after_seconds(exc, 2 * (attempt + 1))
+                    fallback = 60 if rate_limited and attempt == 2 else 2 * (attempt + 1)
+                    delay = _retry_after_seconds(exc, fallback)
+                    if rate_limited and attempt == 2:
+                        raise ProviderRateLimited(delay) from None
+                    if attempt == 2:
+                        raise
                     if delay + 0.5 >= deadline - monotonic():
-                        raise ModelUnavailable(
-                            "Provider rate limit did not reset within this service's time budget; partial results saved."
-                        ) from None
+                        if rate_limited:
+                            raise ProviderRateLimited(delay) from None
+                        raise ModelUnavailable("The provider did not recover within this service's time budget.") from None
                     if rate_limited:
                         self.trace("observe", f"Provider rate limit; retrying in {delay:.1f} seconds.")
                     await cancellable_wait(delay)
