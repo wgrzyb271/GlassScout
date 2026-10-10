@@ -24,7 +24,7 @@ The discovery agent is an optional background job. The dashboard remains usable 
 
 After the initial HTTP observation, `create_agent` orchestrates model calls, tool execution and `ToolMessage` history. Gemini chooses `fetch_service` or `finish_service`; safety middleware validates the call before LangChain executes it. Gemini may propose any service name, but it cannot directly write the service file or declare a result verified. `finish_service` invokes the local verifier and uses `return_direct=True` to end the graph without an unnecessary final model call.
 
-Automatic approval currently requires a matching HTML panel title and a different successful JSON resource identifying the same product. Generic `product`, `application`, or `name` metadata supports products outside a fixed catalog. There are additional identity-schema checks for Proxmox's version response and AdGuard Home's status response. The model must cite at least two actual successful observations with exact quotes. Both verification resources are fetched again before approval. Unsupported formats or authentication barriers go to review.
+Automatic approval currently requires a matching HTML panel title and a different successful JSON resource identifying the same product. Generic `product`, `application`, or `name` metadata supports products outside a fixed catalog. Router firmware can instead use matching product markers in a separate JS/CSS/JSON resource, or a separately observed redirect from the router address to a branded login panel. Known vendor signatures cover common firmware, while an unknown vendor can be proposed from a title that explicitly identifies itself as a router, gateway or firewall. Both resources are refreshed before acceptance. Browser-rendered panels are re-rendered during verification. There are additional identity-schema checks for Proxmox's version response and AdGuard Home's status response. The model must cite at least two actual observations with exact quotes. Unsupported formats or authentication barriers go to review.
 
 These are network fingerprint checks, not cryptographic identity checks. A faithful fake can pass them. A second model opinion is not an authenticity guarantee.
 
@@ -113,3 +113,27 @@ Use `NODE_PATH` for an external Playwright installation and `CHROME_PATH` for an
 Tests use a scripted `BaseChatModel` inside the real `create_agent` graph, so they need no Gemini key and incur no API charges. Offline tests run the production HTTP extraction, LangChain tool execution and middleware, verifier, background job and persistence with a simulated transport. An SDK-boundary test runs the full agent and real Gemini integration with a mocked HTTP response and checks that tool declarations remain enabled while SDK AFC is disabled. A separate live-localhost test runs a real fixture server and skips only if the environment forbids binding a socket.
 
 A real Gemini smoke test is manual: run `python -m devtools.fake_service --port 0`, paste the printed URL into the sidebar with no subnets selected, then run discovery. Repeat with the conflict and unknown scenarios. This checks the chosen model's behavior and quota as well as SDK connectivity.
+
+## Enrichment and resume
+
+`discovery/enrichment.py` follows bounded observed redirects and attempts known
+product signatures before the LangChain graph. `discovery/browser.py` optionally
+renders unresolved HTML using Playwright. Every permitted request is fulfilled
+through `Probe._request_payload` at the pinned target IP; the browser has no
+direct network fallback. External requests, POST, query URLs, frames, service
+workers and WebSockets are blocked. Rendering is limited to 12 seconds, eight
+requests, 256 KiB per response and the remaining service request budget. Two
+requests are reserved for verification; complex pages may remain unverified.
+
+Nmap `-sV --version-light` is selectable. Only high-confidence, actively probed
+non-web protocol matches are excluded; conventional port labels are not evidence.
+`RunRecord.pending_urls` preserves the current and remaining candidates when
+identification stops. Resume uses those URLs with the dialog's current settings,
+without another TCP scan. Credentials are never stored in the queue. Retry
+attempts count toward both model-call and input budgets.
+
+Optional browser integration test (requires installed Playwright and Chromium):
+
+```bash
+GLASSSCOUT_BROWSER_TEST=1 python -m unittest discover -s tests -p 'test_discovery_browser.py' -v
+```

@@ -19,6 +19,14 @@ from discovery.budget import LimitReached, ServiceBudget
 from discovery.models import Observation, clean_url
 
 
+def observation_for_model(observation: Observation) -> dict:
+    """Return bounded evidence for the model while retaining full local records."""
+    data = observation.model_dump(exclude={"instance_id", "digest", "observed_at"})
+    data["text"] = data["text"][:900]
+    data["links"] = data["links"][:12]
+    return data
+
+
 def redact(text: str) -> str:
     text = re.sub(r"AIza[\w-]{25,}", "[redacted]", text)
     text = re.sub(r"\borg_[A-Za-z0-9]+\b", "[organization]", text)
@@ -36,22 +44,52 @@ class Page(HTMLParser):
         self.links: list[str] = []
         self.in_title = False
         self.hidden = 0
+        self.redirects: list[str] = []
+        self.in_script = False
+        self.script_text = ""
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if tag == "title":
             self.in_title = True
         if tag in {"script", "style"}:
             self.hidden += 1
+        if tag == "script":
+            self.in_script = True
+            self.script_text = ""
         if tag in {"a", "link", "script"}:
             link = attrs.get("href") or attrs.get("src")
             if link:
                 self.links.append(link)
+        if tag == "meta":
+            content = attrs.get("content") or ""
+            if (attrs.get("http-equiv") or "").lower() == "refresh":
+                match = re.search(r"(?:^|;)\s*url\s*=\s*['\"]?([^'\"]+)", content, re.I)
+                if match:
+                    self.redirects.append(match[1].strip())
+            if (attrs.get("name") or "").lower() in {"application-name", "generator", "description"}:
+                self.text.append(content[:500])
+        if tag == "form" and (attrs.get("method") or "get").lower() == "get":
+            if attrs.get("action"):
+                self.links.append(attrs["action"])
+        if tag == "img" and attrs.get("alt"):
+            self.text.append(attrs["alt"][:200])
     def handle_endtag(self, tag):
+        if tag == "script":
+            # Literal navigations only; never evaluate fetched JavaScript.
+            patterns = (
+                r'''(?:window\.|document\.)?location(?:\.href)?\s*=\s*(['"])([^'"\s]+)\1\s*;''',
+                r'''(?:window\.|document\.)?location\.(?:replace|assign)\(\s*(['"])([^'"\s]+)\1\s*\)''',
+            )
+            for pattern in patterns:
+                self.redirects.extend(m[2] for m in re.finditer(pattern, self.script_text))
+            self.in_script = False
         if tag == "title":
             self.in_title = False
         if tag in {"script", "style"}:
             self.hidden = max(0, self.hidden - 1)
     def handle_data(self, data):
+        if self.in_script:
+            self.script_text = (self.script_text + data)[:8192]
         if self.in_title:
             self.title += data
         if not self.hidden and data.strip():
@@ -92,6 +130,7 @@ class Probe:
         self.cache: dict[str, Observation] = {}
         self.observations: list[Observation] = []
         self.allowed = {self.endpoint}
+        self.redirects: dict[str, list[str]] = {}
         # Protocol-specific read-only probes complement open-ended link discovery.
         self.allowed.update(urljoin(self.endpoint, p) for p in ("/api2/json/version", "/control/status", "/manifest.json", "/api/info"))
 
@@ -115,7 +154,13 @@ class Probe:
         return obs
 
     def _request(self, url: str, timeout: float) -> Observation:
+        return self._request_payload(url, timeout)[0]
+
+    def _request_payload(self, url: str, timeout: float, max_bytes: int = 65536):
+        """Pinned transport shared with the browser; never forwards cookies."""
         obs = Observation(url=url)
+        raw = bytearray()
+        headers = {}
         p = urlsplit(url)
         connection = http.client.HTTPConnection(self.address, p.port or (443 if p.scheme == "https" else 80), timeout=timeout)
         deadline = min(self.budget.deadline, monotonic() + timeout)
@@ -146,15 +191,15 @@ class Probe:
             response = connection.getresponse()
             obs.status = response.status
             obs.content_type = response.getheader("content-type", "").split(";")[0].lower()
-            raw = bytearray()
-            while len(raw) < 65536 and not getattr(response, "isclosed", lambda: False)():
+            headers = {key: response.getheader(key, "") for key in ("content-type", "location")}
+            while len(raw) < max_bytes and not getattr(response, "isclosed", lambda: False)():
                 self.budget.check()
                 remaining = deadline - monotonic()
                 if remaining <= 0:
                     raise TimeoutError()
                 if transport:
                     transport.settimeout(remaining)
-                chunk = response.read1(min(4096, 65536 - len(raw)))
+                chunk = response.read1(min(4096, max_bytes - len(raw)))
                 if not chunk:
                     break
                 raw.extend(chunk)
@@ -167,20 +212,22 @@ class Probe:
         finally:
             timer.cancel()
             connection.close()
-        return obs
+        return obs, bytes(raw), headers
 
     def _extract(self, obs: Observation, raw: bytes, response) -> None:
         body = raw.decode("utf-8", errors="replace")
         obs.digest = hashlib.sha256(raw).hexdigest()
         links = []
+        redirects = []
         if 300 <= obs.status < 400:
-            links.append(response.getheader("location", ""))
+            redirects.append(response.getheader("location", ""))
         if "html" in obs.content_type:
             page = Page()
             page.feed(body)
             obs.title = redact(page.title)[:160]
             obs.text = redact(" ".join(page.text))[:6000]
             links.extend(page.links)
+            redirects.extend(page.redirects)
         elif "json" in obs.content_type:
             try:
                 document = json.loads(body)
@@ -205,14 +252,24 @@ class Probe:
                 obs.text = serialized[:6000]
         elif any(t in obs.content_type for t in ("text/", "javascript")):
             obs.text = redact(body)[:6000]
-        server = redact(response.getheader("server", ""))[:100]
-        if server:
-            obs.text = f"Server: {server}\n{obs.text}"
-        for link in links[:40]:
+        for header in ("server", "www-authenticate", "x-powered-by"):
+            value = redact(response.getheader(header, ""))[:160]
+            if value:
+                obs.text = f"{header.title()}: {value}\n{obs.text}"
+        self.redirects[obs.url] = []
+        for link in (redirects + links)[:40]:
             try:
                 linked = clean_url(urljoin(obs.url, link))
                 if origin(linked) == origin(self.endpoint) and allowed_path(linked):
                     self.allowed.add(linked)
                     obs.links.append(linked)
+                    if link in redirects:
+                        self.redirects[obs.url].append(linked)
             except ValueError:
                 continue
+        if self.redirects[obs.url]:
+            observed = list(dict.fromkeys(self.redirects[obs.url]))
+            self.redirects[obs.url] = observed
+            obs.facts["redirects"] = observed
+            redirect_text = "\n".join(f"Observed redirect: {target}" for target in observed)
+            obs.text = f"{obs.text}\n{redirect_text}".strip()[:6000]

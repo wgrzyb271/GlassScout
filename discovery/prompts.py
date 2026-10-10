@@ -22,7 +22,14 @@ an unchanged request. Never invent an observation or an observation ID.
 FINISH: Call finish_service with proposal=null if evidence is insufficient or
 no useful checks remain. Otherwise cite exact short quotes and observation IDs
 from a product-identifying page AND a separate machine-readable identity
-(version API or application manifest). Local code decides verification, not you.
+(version API or application manifest). A router name may instead be supported
+by a separate static firmware resource or an observed redirect from the router
+address to a separately fetched, branded router login panel.
+Local code decides verification, not you. Prefer observed redirects and links
+over generic API paths. Do not probe Proxmox or AdGuard APIs without evidence
+for those products. Report HTTP 200/403/404 accurately; a failed API probe does
+not mean the root page was unavailable. If there is a credible product name
+but no independent confirmation, propose it for review rather than discarding it.
 Every quote must be copied character for character from the value of that
 observation's title or text field. Never include the field name or any added
 prefix such as "title:" or "text:" in a quote, and never reword a quote.

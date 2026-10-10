@@ -46,7 +46,7 @@ class Network(Contract):
 
 class Settings(Contract):
     networks: list[str] = Field(default_factory=list, max_length=16)
-    seed_urls: list[str] = Field(default_factory=list, max_length=32)
+    seed_urls: list[str] = Field(default_factory=list, max_length=512)
     model: str = Field(default="gemini-3.6-flash", min_length=1, max_length=100)
     provider: Literal["gemini", "groq"] = "gemini"
     ports: str = "1-65535"
@@ -60,6 +60,12 @@ class Settings(Contract):
     max_endpoints: int = Field(default=64, ge=1, le=256)
     allow_self_signed: bool = False
     mdns: bool = True
+    service_detection: bool = True
+    browser_fallback: bool = False
+    skip_active_services: bool = True
+    seed_urls_are_manual: bool = True
+    scan_chunks: list[str] = Field(default_factory=list, max_length=256)
+    unlimited_run: bool = False
 
     @field_validator("seed_urls")
     @classmethod
@@ -89,6 +95,11 @@ class Settings(Contract):
                 raise ValueError("Invalid TCP port range.")
         return value
 
+    @field_validator("scan_chunks")
+    @classmethod
+    def scan_chunk_ranges(cls, values: list[str]) -> list[str]:
+        return [cls.port_range(value) for value in values]
+
     @model_validator(mode="after")
     def target_required(self) -> Settings:
         if not self.networks and not self.seed_urls:
@@ -111,6 +122,7 @@ class Observation(Contract):
     facts: dict = Field(default_factory=dict)
     digest: str = ""
     error: str = ""
+    source: Literal["http", "browser"] = "http"
 
 
 class EvidenceRef(Contract):
@@ -174,3 +186,11 @@ class RunRecord(Contract):
     remaining_seconds: float | None = None
     scan_timeout_seconds: float = 0
     scan_remaining_seconds: float | None = None
+    pending_urls: list[str] = Field(default_factory=list)
+    scan_networks: list[str] = Field(default_factory=list)
+    scan_ports: str = ""
+    pending_port_ranges: list[str] = Field(default_factory=list)
+    skipped_active_services: int = 0
+    scan_batches_total: int = 0
+    scan_batches_completed: int = 0
+    scan_detail: str = ""

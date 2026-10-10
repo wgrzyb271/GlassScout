@@ -24,7 +24,7 @@ from discovery.agent import identify
 from discovery.budget import Budget, LimitReached
 from discovery.middleware import DiscoveryGuard, _is_rate_limit, _is_transient_provider_error, _retry_after_seconds
 from discovery.models import EvidenceRef, FetchServiceInput, Finding, FinishServiceInput, Observation, Proposal, RunRecord, Settings, clean_url
-from discovery.network import parse_host, scan_tcp
+from discovery.network import chunk_ports, parse_host, scan_tcp
 from discovery.probe import Probe, redact, resolve_local
 from discovery.provider import create_gemini_model, ModelUnavailable
 from discovery.runner import JobManager
@@ -141,10 +141,11 @@ class ScriptedModel(BaseChatModel):
             return response
         if self.mode == "redirect":
             return self.call("fetch_service", url=observations[-1]["links"][0], summary="Follow local redirect")
-        if len(observations) == 1:
+        if not any(o["url"].endswith("/api/info") for o in observations):
             return self.call("fetch_service", url=context["endpoint"] + "api/info", summary="Check the identity API")
         name = "Proxmox VE" if self.mode == "conflict" else "GlassScout Demo"
-        evidence = [EvidenceRef(observation_id=o["id"], quote=o["title"] or "GlassScout Demo") for o in observations[:2]]
+        successful = [o for o in observations if 200 <= o["status"] < 300]
+        evidence = [EvidenceRef(observation_id=o["id"], quote=o["title"] or "GlassScout Demo") for o in successful[:2]]
         return self.call("finish_service", summary="Collected evidence", proposal=Proposal(name=name, url=context["endpoint"], evidence=evidence).model_dump())
 
 
@@ -452,6 +453,27 @@ class AgentTests(unittest.TestCase):
 
 
 class StorageTests(unittest.TestCase):
+    def test_services_backup_round_trip_replaces_validated_list(self):
+        with TemporaryDirectory() as directory:
+            target = Path(directory) / "services.json"
+            original = [services.clean_service({"id": "printer", "name": "Printer", "url": "http://192.168.2.55/"})]
+            with patch.object(services, "DATA_FILE", target):
+                payload = services.services_backup(original)
+                services.save_services([services.clean_service({"id": "temporary", "name": "Temporary", "url": "http://localhost/"})])
+                restored = services.restore_services_backup(payload)
+            self.assertEqual(restored, original)
+            self.assertEqual(json.loads(target.read_text()), original)
+
+    def test_invalid_backup_does_not_replace_services(self):
+        with TemporaryDirectory() as directory:
+            target = Path(directory) / "services.json"
+            with patch.object(services, "DATA_FILE", target):
+                services.save_services([services.clean_service({"id": "kept", "name": "Kept", "url": "http://localhost/"})])
+                before = target.read_text()
+                with self.assertRaises(ValueError):
+                    services.restore_services_backup('{"services":[{"name":"Broken"}]}')
+            self.assertEqual(target.read_text(), before)
+
     def test_modify_preserves_other_services_and_identity(self):
         with TemporaryDirectory() as directory:
             target = Path(directory) / "services.json"
@@ -499,6 +521,39 @@ class StorageTests(unittest.TestCase):
             self.assertTrue(first)
             self.assertFalse(second)
             self.assertEqual(len(json.loads((Path(directory) / "services.json").read_text())), 1)
+
+    def test_same_service_on_one_device_prefers_https_without_duplicates(self):
+        with TemporaryDirectory() as directory:
+            store = Store(Path(directory))
+            http = Finding(
+                endpoint="http://192.168.2.55/",
+                proposal=Proposal(name="Konica Minolta", url="http://192.168.2.55/"),
+                state="verified", reason="verified",
+            )
+            https = Finding(
+                endpoint="https://192.168.2.55:8443/",
+                proposal=Proposal(name="Konica Minolta", url="https://192.168.2.55:8443/"),
+                state="verified", reason="verified",
+            )
+            _, first = store.save_finding(http)
+            _, second = store.save_finding(https)
+            cards = json.loads((Path(directory) / "services.json").read_text())
+            self.assertTrue(first)
+            self.assertFalse(second)
+            self.assertEqual(len(cards), 1)
+            self.assertEqual(cards[0]["url"], "https://192.168.2.55:8443/")
+
+    def test_same_named_http_panels_on_one_device_collapse_to_one_card(self):
+        with TemporaryDirectory() as directory:
+            store = Store(Path(directory))
+            for url in ("http://192.168.2.55/", "http://192.168.2.55:631/"):
+                store.save_finding(Finding(
+                    endpoint=url, proposal=Proposal(name="Konica Minolta", url=url),
+                    state="verified", reason="verified",
+                ))
+            cards = json.loads((Path(directory) / "services.json").read_text())
+            self.assertEqual(len(cards), 1)
+            self.assertEqual(cards[0]["url"], "http://192.168.2.55/")
     def test_rejection_is_remembered(self):
         with TemporaryDirectory() as directory:
             store = Store(Path(directory))
@@ -655,6 +710,75 @@ class ProviderTests(unittest.TestCase):
 
 
 class ScannerTests(unittest.TestCase):
+    def test_port_ranges_are_split_into_resumable_batches(self):
+        self.assertEqual(chunk_ports("1-2050"), ["1-1024", "1025-2048", "2049-2050"])
+        self.assertEqual(chunk_ports("80,443,8000-8002", size=2), ["80,443", "8000-8001", "8002"])
+
+    def test_interrupted_port_batch_is_persisted_for_resume(self):
+        with TemporaryDirectory() as directory, patch("discovery.runner.shutil.which", return_value="/test/nmap"):
+            job = JobManager(Path(directory))
+            settings = Settings(networks=["192.168.2.0/24"], ports="1-2050", mdns=False)
+            with patch("discovery.runner.scan_tcp", side_effect=[None, LimitReached("scan timeout")]):
+                job.start(settings, "", model=ScriptedModel())
+                job.thread.join(5)
+            self.assertEqual(job.snapshot().status, "partial")
+            self.assertEqual(job.snapshot().pending_port_ranges, ["1025-2048", "2049-2050"])
+            self.assertEqual((job.snapshot().scan_batches_completed, job.snapshot().scan_batches_total), (1, 3))
+
+            address_resume = JobManager(Path(directory))
+            address_resume.start(
+                Settings(seed_urls=["http://127.0.0.1:9/"], seed_urls_are_manual=False),
+                "", model=ScriptedModel(),
+            )
+            address_resume.thread.join(5)
+            self.assertEqual(address_resume.snapshot().pending_port_ranges, ["1025-2048", "2049-2050"])
+
+            replacement = JobManager(Path(directory))
+            resume = Settings(
+                networks=["192.168.2.0/24"], ports="1-2050", mdns=False,
+                scan_chunks=address_resume.snapshot().pending_port_ranges,
+            )
+            with patch("discovery.runner.scan_tcp") as scan:
+                replacement.start(resume, "", model=ScriptedModel())
+                replacement.thread.join(5)
+            self.assertEqual(replacement.snapshot().status, "completed")
+            self.assertEqual(replacement.snapshot().pending_port_ranges, [])
+            self.assertEqual((replacement.snapshot().scan_batches_completed, replacement.snapshot().scan_batches_total), (3, 3))
+            self.assertEqual(scan.call_count, 2)
+
+    def test_scanning_and_identification_run_concurrently(self):
+        identification_started = Event()
+
+        async def identify_during_scan(probe, _model, _event, _error):
+            identification_started.set()
+            probe.observations.append(Observation(url=probe.endpoint, status=200, content_type="text/html"))
+            return Finding(
+                endpoint=probe.endpoint,
+                proposal=Proposal(name="Concurrent panel", url=probe.endpoint),
+                state="verified", reason="verified",
+                observations=probe.observations,
+            )
+
+        def scan(_budget, found, _progress, *, ports):
+            found("127.0.0.1", 48765)
+            if not identification_started.wait(2):
+                raise AssertionError("identification did not start while scanning was active")
+
+        with TemporaryDirectory() as directory, \
+                patch("discovery.runner.shutil.which", return_value="/test/nmap"), \
+                patch("discovery.runner.scan_tcp", side_effect=scan), \
+                patch("discovery.runner.identify", side_effect=identify_during_scan):
+            job = JobManager(Path(directory))
+            job.start(
+                Settings(networks=["127.0.0.1/32"], ports="48765", mdns=False),
+                "", model=ScriptedModel(),
+            )
+            job.thread.join(5)
+            self.assertFalse(job.running)
+            self.assertEqual(job.snapshot().status, "completed")
+            self.assertEqual(job.snapshot().scan_batches_completed, 1)
+            self.assertEqual(job.snapshot().added, 1)
+
     def test_cancel_keeps_completed_hosts_and_terminates_process(self):
         budget = Budget(Settings(networks=["192.168.1.0/24"]), Event())
         arguments = []

@@ -14,7 +14,7 @@ from langchain_core.tools import BaseTool
 
 from discovery.budget import LimitReached
 from discovery.models import Finding, FinishServiceInput, Observation
-from discovery.probe import Probe, redact
+from discovery.probe import Probe, observation_for_model, redact
 from discovery.provider import ModelUnavailable
 
 
@@ -57,17 +57,21 @@ def _retry_after_seconds(exc: Exception, fallback: float) -> float:
             candidates.append(str(value))
     candidates.append(str(exc))
     patterns = (
-        r"try again in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|s)?",
-        r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(ms|s)?\s*$",
+        r"try again in\s+((?:[0-9]+(?:\.[0-9]+)?\s*(?:ms|h|m|s)\s*)+)",
+        r"^\s*((?:[0-9]+(?:\.[0-9]+)?\s*(?:ms|h|m|s)\s*)+)\s*$",
+        r"^\s*([0-9]+(?:\.[0-9]+)?)\s*$",
     )
     for candidate in candidates:
         for pattern in patterns:
             match = re.search(pattern, candidate, re.I)
             if match:
-                seconds = float(match.group(1))
-                if (match.group(2) or "s").lower() == "ms":
-                    seconds /= 1000
-                return min(60.0, max(0.2, seconds + 0.25))
+                duration = match.group(1).strip()
+                parts = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*(ms|h|m|s)", duration, re.I)
+                seconds = sum(float(n) * {"ms": .001, "s": 1, "m": 60, "h": 3600}[unit.lower()]
+                              for n, unit in parts) if parts else float(duration)
+                # Do not retry earlier than the provider requested. The caller
+                # persists the queue if this exceeds the service deadline.
+                return max(0.2, seconds + 0.25)
     return fallback
 
 
@@ -110,8 +114,8 @@ class DiscoveryGuard(AgentMiddleware):
             raise LimitReached("No new evidence in two consecutive steps")
         context = {
             "endpoint": self.probe.endpoint,
-            "observations": [o.model_dump(exclude={"instance_id", "digest", "observed_at"}) for o in self.probe.observations[-10:]],
-            "allowed_urls": sorted(self.probe.allowed - self.probe.cache.keys()),
+            "observations": [observation_for_model(o) for o in self.probe.observations[-6:]],
+            "allowed_urls": sorted(self.probe.allowed - self.probe.cache.keys())[:24],
             "remaining_model_calls": self.probe.budget.run.settings.model_calls - self.probe.budget.model_calls,
             "remaining_fetches": max(0, self.probe.budget.run.settings.tool_calls - self.probe.budget.tool_calls - 2),
         }
@@ -139,7 +143,11 @@ class DiscoveryGuard(AgentMiddleware):
         async def call_with_retry():  # TRANSIENT-RETRY
             for attempt in range(3):
                 try:
+                    if attempt:
+                        self.probe.budget.model(chars)
                     return await handler(request)
+                except LimitReached:
+                    raise
                 except Exception as exc:
                     rate_limited = _is_rate_limit(exc)
                     self.log_error("provider-rate-limit" if rate_limited else "provider-error", exc, attempt + 1)
@@ -169,7 +177,11 @@ class DiscoveryGuard(AgentMiddleware):
         except ValueError:
             # after_model routes this to a bounded repair turn.
             return ModelResponse(result=[AIMessage(content="Invalid model response; a valid tool call is required.")])
-        except Exception:
+        except Exception as exc:
+            if _status_code(exc) == 413 or "REQUEST TOO LARGE" in str(exc).upper():
+                raise ModelUnavailable(
+                    "The provider rejected an oversized request. Evidence was kept; retry with the compacted scanner or another provider."
+                ) from None
             # Provider exceptions may contain the key; never persist their text.
             raise ModelUnavailable("The model provider is unavailable. Check the API key, model access, quota and internet connection.") from None
         finally:

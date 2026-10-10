@@ -15,7 +15,7 @@ class LimitReached(Exception):
 class Budget:
     def __init__(self, settings: Settings, stop: Event):
         self.settings, self.stop = settings, stop
-        self.deadline = monotonic() + settings.run_seconds
+        self.deadline = float("inf") if settings.unlimited_run else monotonic() + settings.run_seconds
         self.model_calls = 0
         self.input_chars = 0
 

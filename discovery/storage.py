@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 import traceback
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from discovery.models import Finding, RunRecord, clean_url
@@ -20,6 +21,17 @@ def fingerprint(finding: Finding) -> str:
     observations = sorted({(o.url, o.status, o.title, o.product, o.version, o.instance_id, o.error) for o in finding.observations})
     payload = [finding.endpoint, finding.proposal.name if finding.proposal else "", observations]
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def normalized_service_url(value: str) -> str:
+    return clean_url(value if "://" in value else f"http://{value}")
+
+
+def is_https_service_url(value: str) -> bool:
+    try:
+        return urlsplit(normalized_service_url(value)).scheme == "https"
+    except ValueError:
+        return False
 
 
 class Store:
@@ -90,25 +102,37 @@ class Store:
                 raise ValueError("Invalid services file; refusing to replace it.")
         else:
             services = []
-        match = None
+        matches = []
+        proposal_host = urlsplit(proposal.url).hostname
+        proposal_name = " ".join(proposal.name.casefold().split())
         for service in services:
             try:
                 existing_url = service["url"]
-                same = clean_url(existing_url if "://" in existing_url else f"http://{existing_url}") == proposal.url
+                normalized = clean_url(existing_url if "://" in existing_url else f"http://{existing_url}")
+                same_url = normalized == proposal.url
+                same_identity = (
+                    urlsplit(normalized).hostname == proposal_host
+                    and " ".join(str(service.get("name", "")).casefold().split()) == proposal_name
+                )
             except (ValueError, KeyError):
-                same = False
-            if same or (finding.service_id and service.get("id") == finding.service_id):
-                match = service
-                break
-        added = match is None
+                same_url = same_identity = False
+            if same_url or same_identity or (finding.service_id and service.get("id") == finding.service_id):
+                matches.append(service)
+        match = matches[0] if matches else None
+        added = not matches
         if match is None:
             match = clean_service({"id": str(uuid4()), "name": proposal.name, "kind": proposal.category, "description": proposal.description, "url": proposal.url, "icon": "◇", "tone": "mint"})
             services.append(match)
         else:
-            # Preserve user-authored presentation and only refresh the endpoint.
-            match["url"] = proposal.url
+            # One card per named service and device. Prefer HTTPS whenever the
+            # same panel is reachable through both transports or ports.
+            existing_https = next((service["url"] for service in matches if is_https_service_url(service["url"])), "")
+            match["url"] = proposal.url if urlsplit(proposal.url).scheme == "https" else (existing_https or match["url"])
             if manual:
                 match["name"] = proposal.name
+            duplicate_ids = {service["id"] for service in matches[1:]}
+            if duplicate_ids:
+                services = [service for service in services if service["id"] not in duplicate_ids]
         finding.service_id = match["id"]
         atomic_json(target, services)
         return added

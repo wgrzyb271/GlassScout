@@ -16,6 +16,8 @@ from discovery.probe import Probe
 from discovery.provider import ModelUnavailable
 from discovery.prompts import REACT_SYSTEM_PROMPT
 from discovery.tools import service_tools
+from discovery.enrichment import enrich
+from discovery.verification import assess, verify
 
 
 async def identify(
@@ -26,12 +28,21 @@ async def identify(
 ) -> Finding:
     tools = list(service_tools(probe).values())
     guard = DiscoveryGuard(probe, tools, event, error)
+    local_proposal = None
     reason = "The agent finished without a verified service proposal."
     try:
         await probe.fetch(probe.endpoint)
         first = probe.observations[-1]
         if first.error:
             return Finding(endpoint=probe.endpoint, reason=f"Initial request failed: {first.error}", observations=probe.observations)
+
+        local_proposal = guard.proposal = await enrich(probe, event)
+        if guard.proposal is not None and assess(guard.proposal, probe.observations)[0]:
+            verified, detail = await verify(guard.proposal, probe)
+            if verified:
+                event("fingerprint", f"Recognized {guard.proposal.name} without an AI call.")
+                return Finding(endpoint=probe.endpoint, proposal=guard.proposal, state="verified",
+                               reason=detail, observations=probe.observations)
 
         agent = create_agent(
             model=model,
@@ -48,6 +59,9 @@ async def identify(
         )
         probe.budget.check()
         if guard.finding is not None:
+            if guard.finding.proposal is None and local_proposal is not None:
+                guard.finding.proposal = local_proposal
+                guard.finding.reason = "Product markers suggest this name, but independent verification is incomplete; please review."
             return guard.finding
     except LimitReached as exc:
         reason = str(exc)

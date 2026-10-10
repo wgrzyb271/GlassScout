@@ -74,6 +74,23 @@ render_service_grid([{'id': 'a'}, {'id': 'b'}])
             self.assertEqual(agent_panel.configured_value("LLM_PROVIDER"), "groq")
             self.assertEqual(agent_panel.configured_value("GROQ_MODEL"), "configured-model")
 
+    def test_encrypted_systemd_credential_takes_precedence(self):
+        from dashboard import agent_panel
+        with TemporaryDirectory() as directory:
+            Path(directory, "GROQ_API_KEY").write_text("credential-key\n")
+            with patch.dict(agent_panel.os.environ, {
+                "CREDENTIALS_DIRECTORY": directory,
+                "GROQ_API_KEY": "environment-key",
+            }, clear=True), patch.object(agent_panel.st, "secrets", {"GROQ_API_KEY": "file-key"}):
+                self.assertEqual(agent_panel.configured_key("groq"), "credential-key")
+
+    def test_api_key_is_not_read_from_streamlit_file(self):
+        from dashboard import agent_panel
+        with patch.dict(agent_panel.os.environ, {}, clear=True), patch.object(
+            agent_panel.st, "secrets", {"GROQ_API_KEY": "plaintext-file-key"}
+        ):
+            self.assertEqual(agent_panel.configured_key("groq"), "")
+
     def test_modify_service_save_cancel_and_endpoint_sync(self):
         from dashboard import agent_panel, services
         with TemporaryDirectory() as directory:
@@ -151,6 +168,36 @@ render_progress(record, True)
         self.assertEqual(bars[1].proto.text, "TCP scan timeout in 01:55")
         self.assertTrue(any("not scan completion" in c.value for c in app.caption))
 
+    def test_compact_finished_status_hides_diagnostics_and_empty_bar(self):
+        script = '''
+from dashboard.discovery_progress import render_progress
+from discovery.models import RunRecord
+record = RunRecord(status="partial", phase="Model unavailable — results saved",
+                   detail="http://192.168.2.1/", endpoints=1, processed=0,
+                   warnings=["Long provider diagnostic"]).model_dump()
+render_progress(record, False, compact=True)
+'''
+        app = AppTest.from_string(script).run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.get("progress"))
+        self.assertFalse(app.warning)
+        self.assertEqual([item.value for item in app.caption], ["Scan incomplete · 0 added"])
+
+    def test_compact_running_status_shows_scan_and_identification_progress(self):
+        script = '''
+from dashboard.discovery_progress import render_progress
+from discovery.models import RunRecord
+record = RunRecord(phase="Scanning and identifying services", endpoints=8, processed=3,
+                   scan_batches_total=64, scan_batches_completed=12).model_dump()
+render_progress(record, True, compact=True)
+'''
+        app = AppTest.from_string(script).run()
+        self.assertFalse(app.exception)
+        bars = app.get("progress")
+        self.assertEqual(len(bars), 2)
+        self.assertEqual(bars[0].proto.text, "12 / 64 port batches scanned")
+        self.assertEqual(bars[1].proto.text, "3 / 8 discovered addresses checked")
+
     def test_finished_or_interrupted_run_does_not_show_live_timeout(self):
         script = '''
 from dashboard.discovery_progress import render_progress
@@ -187,14 +234,20 @@ render_progress(record, False)
             with patch.object(agent_panel, "dependencies_available", return_value=True), patch.object(agent_panel, "manager", return_value=job), patch.object(agent_panel, "networks", return_value=[]), patch.object(agent_panel, "configured_key", return_value=""), patch.object(agent_panel, "DATA_FILE", data / "services.json"), patch.object(services, "DATA_FILE", data / "services.json"):
                 app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py")).run(timeout=20)
                 self.assertFalse(app.exception, [e.message for e in app.exception])
+                self.assertFalse(app.text)
+                self.assertFalse(any(button.label == "Approve / save changes" for button in app.button))
                 app.button(key="open_discovery").click().run(timeout=20)
                 self.assertTrue(any(button.label == "Start discovery" for button in app.button))
+                self.assertTrue(any(button.label == "Scan entire network" for button in app.button))
+                self.assertFalse(any("API key" in field.label for field in app.text_input))
                 self.assertTrue(any("1. Choose where to look" in item.value for item in app.markdown))
                 self.assertTrue(any("2. AI identification" in item.value for item in app.markdown))
                 self.assertTrue(any(expander.label == "Advanced scan settings" for expander in app.expander))
-                self.assertTrue(any("ReAct · Reason" in item.value for item in app.markdown))
-                self.assertTrue(any("Check the identity API" in item.value for item in app.text))
-                self.assertTrue(any("HTTP 200" in item.value for item in app.text))
+                next(b for b in app.button if b.label == "Cancel").click().run(timeout=20)
+                app.button(key="open_discovery_results").click().run(timeout=20)
+                self.assertFalse(app.exception, [e.message for e in app.exception])
+                self.assertFalse(any(e.label in {"Evidence (1)", "Scan diagnostics", "History"} for e in app.expander))
+                self.assertTrue(any(button.label == "Download discovery report" for button in app.get("download_button")))
                 approve = next(button for button in app.button if button.label == "Approve / save changes")
                 approve.click().run(timeout=20)
                 self.assertFalse(app.exception, [e.message for e in app.exception])
@@ -214,7 +267,11 @@ render_progress(record, False)
                 services.save_services([services.clean_service({"id": "kept", "name": "Kept", "url": "http://localhost:8000"})])
             with patch.object(agent_panel, "dependencies_available", return_value=True), patch.object(agent_panel, "manager", return_value=job), patch.object(agent_panel, "networks", return_value=[]), patch.object(agent_panel, "configured_key", return_value=""), patch.object(agent_panel, "DATA_FILE", service_file), patch.object(services, "DATA_FILE", service_file):
                 app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py")).run(timeout=20)
-                next(button for button in app.button if button.label == "Delete discovery history").click().run(timeout=20)
+                app.button(key="open_discovery_results").click().run(timeout=20)
+                next(button for button in app.button if button.label == "Delete history").click().run(timeout=20)
+                self.assertTrue(any(button.label == "Confirm deletion" for button in app.button))
+                self.assertTrue(service_file.exists())
+                next(button for button in app.button if button.label == "Confirm deletion").click().run(timeout=20)
                 self.assertFalse(app.exception, [e.message for e in app.exception])
                 self.assertEqual(job.store.read(), {"findings": {}, "run": None, "events": []})
                 self.assertEqual(json.loads(service_file.read_text())[0]["id"], "kept")

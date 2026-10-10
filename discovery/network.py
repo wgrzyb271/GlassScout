@@ -57,7 +57,7 @@ def in_ranges(address: str, ranges: list[str]) -> bool:
         return False
 
 
-def parse_host(xml: str, ranges: list[str]) -> list[tuple[str, int]]:
+def parse_host(xml: str, ranges: list[str], *, filter_services: bool = False) -> list[tuple[str, int]]:
     host = ET.fromstring(xml)
     address = host.find("address[@addrtype='ipv4']")
     if address is None or not in_ranges(address.get("addr", ""), ranges):
@@ -65,10 +65,44 @@ def parse_host(xml: str, ranges: list[str]) -> list[tuple[str, int]]:
     return [(address.get("addr", ""), int(port.get("portid", "0")))
             for port in host.findall("./ports/port")
             if port.get("protocol") == "tcp" and port.find("state") is not None
-            and port.find("state").get("state") == "open"]
+            and port.find("state").get("state") == "open"
+            and (not filter_services or not confirmed_non_web(port))]
 
 
-def scan_tcp(budget: Budget, found: Callable[[str, int], None], progress: Callable[[str], None]) -> None:
+def confirmed_non_web(port) -> bool:
+    service = port.find("service")
+    if service is None or service.get("method") != "probed":
+        return False
+    # Never exclude a service merely from its conventional port number.
+    return service.get("conf", "0").isdigit() and int(service.get("conf", "0")) >= 7 and service.get("name") in {
+        "ssh", "microsoft-ds", "netbios-ssn", "ftp", "smtp", "pop3", "imap",
+        "mysql", "postgresql", "redis", "vnc", "ms-wbt-server", "jetdirect", "rtsp", "airplay", "raop",
+    }
+
+
+def chunk_ports(spec: str, size: int = 1024) -> list[str]:
+    """Split a validated Nmap port expression into resumable ranges."""
+    ports: set[int] = set()
+    for part in spec.split(","):
+        limits = [int(value) for value in part.split("-")]
+        ports.update(range(limits[0], limits[-1] + 1))
+    ordered = sorted(ports)
+    chunks = []
+    for offset in range(0, len(ordered), size):
+        group = ordered[offset:offset + size]
+        ranges = []
+        start = previous = group[0]
+        for port in group[1:]:
+            if port != previous + 1:
+                ranges.append(str(start) if start == previous else f"{start}-{previous}")
+                start = port
+            previous = port
+        ranges.append(str(start) if start == previous else f"{start}-{previous}")
+        chunks.append(",".join(ranges))
+    return chunks
+
+
+def scan_tcp(budget: Budget, found: Callable[[str, int], None], progress: Callable[[str], None], *, ports: str | None = None) -> None:
     """No ICMP filter: every address in the selected range is considered.
 
     Nmap writes XML incrementally; completed hosts survive cancellation. A run
@@ -78,8 +112,11 @@ def scan_tcp(budget: Budget, found: Callable[[str, int], None], progress: Callab
     if not executable:
         raise RuntimeError("Nmap is missing. Install Nmap for subnet scans, or use a test URL.")
     settings = budget.settings
-    args = [executable, "-sT", "-Pn", "-n", "--open", "-p", settings.ports,
+    port_spec = ports or settings.ports
+    args = [executable, "-sT", "-Pn", "-n", "--open", "-p", port_spec,
             "--max-retries", "1", "--max-hostgroup", "8", "-T3", "--stats-every", "2s", "-oX", "-", *settings.networks]
+    if settings.service_detection:
+        args[1:1] = ["-sV", "--version-light"]
     with tempfile.TemporaryDirectory(prefix="glassscout-scan-") as directory:
         output = Path(directory) / "nmap.xml"
         errors = Path(directory) / "nmap.err"
@@ -97,11 +134,11 @@ def scan_tcp(budget: Budget, found: Callable[[str, int], None], progress: Callab
                 match = re.search(r"<host\b[^>]*>.*?</host>", pending, re.S)
                 if not match:
                     break
-                for address, port in parse_host(match[0], settings.networks):
+                for address, port in parse_host(match[0], settings.networks, filter_services=settings.service_detection):
                     found(address, port)
                 pending = pending[match.end():]
                 hosts += 1
-                progress(f"TCP scan: {hosts} hosts completed; ports {settings.ports}")
+                progress(f"TCP scan: {hosts} hosts completed; ports {port_spec}")
         try:
             with output.open("w") as out, errors.open("w") as err:
                 process = subprocess.Popen(args, stdout=out, stderr=err)

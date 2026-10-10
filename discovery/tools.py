@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 from langchain.tools import tool
 from langchain_core.tools import BaseTool
 
 from discovery.budget import LimitReached
 from discovery.models import FetchServiceInput, Finding, FinishServiceInput, Proposal
-from discovery.probe import Probe, redact
+from discovery.probe import Probe, observation_for_model, redact
 from discovery.verification import verify
 
 
@@ -26,7 +28,7 @@ def service_tools(probe: Probe) -> dict[str, BaseTool]:
         if probe.budget.tool_calls >= probe.budget.run.settings.tool_calls - 2:
             raise LimitReached("Request budget reserved for verification; no further discovery requests")
         observation = await probe.fetch(url)
-        content = observation.model_dump_json(exclude={"instance_id", "digest", "observed_at"})
+        content = json.dumps(observation_for_model(observation), ensure_ascii=False)
         return content, observation
 
     @tool("finish_service", args_schema=FinishServiceInput, response_format="content_and_artifact", return_direct=True)

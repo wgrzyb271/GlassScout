@@ -1,0 +1,2 @@
+# Optional JS discovery fallback. Install Chromium separately (see README).
+playwright>=1.48,<2

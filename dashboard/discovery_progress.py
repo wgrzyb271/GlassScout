@@ -10,12 +10,44 @@ def duration_label(seconds: float) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
-def render_progress(record: dict, running: bool) -> None:
+def render_progress(record: dict, running: bool, *, compact: bool = False) -> None:
     status = record["status"]
     if status == "running" and not running:
         status = "interrupted — application restarted"
+    if compact:
+        labels = {"completed": "Scan complete", "partial": "Scan incomplete",
+                  "failed": "Scan failed", "stopped": "Scan stopped"}
+        label = record["phase"] if running else labels.get(status, "Scan interrupted")
+        st.caption(f"{label} · {record['added']} added")
+        if running:
+            scan_total = record.get("scan_batches_total", 0)
+            scan_completed = record.get("scan_batches_completed", 0)
+            if scan_total:
+                st.progress(
+                    min(max(scan_completed / scan_total, 0.0), 1.0),
+                    text=f"{scan_completed} / {scan_total} port batches scanned",
+                )
+            total = record["endpoints"]
+            if total:
+                st.progress(min(max(record["processed"] / total, 0.0), 1.0),
+                            text=f"{record['processed']} / {total} discovered addresses checked")
+            elif record.get("remaining_seconds") is not None:
+                st.caption(f"Time remaining: {duration_label(record['remaining_seconds'])}")
+        return
     st.write(f"{record['phase']} · {status}")
     st.caption(record["detail"])
+    if record.get("skipped_active_services"):
+        st.caption(f"Skipped {record['skipped_active_services']} active saved endpoint(s).")
+
+    scan_total = record.get("scan_batches_total", 0)
+    scan_completed = record.get("scan_batches_completed", 0)
+    if scan_total:
+        st.progress(
+            min(max(scan_completed / scan_total, 0.0), 1.0),
+            text=f"{scan_completed} / {scan_total} port batches scanned",
+        )
+        if record.get("scan_detail"):
+            st.caption(record["scan_detail"])
 
     remaining = record.get("remaining_seconds")
     limit = record.get("timeout_seconds", 0)

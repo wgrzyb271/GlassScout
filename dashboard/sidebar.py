@@ -8,7 +8,7 @@ from uuid import uuid4
 import streamlit as st
 
 from dashboard.config import CUSTOM_ICON, ICONS, TONES
-from dashboard.services import clean_service, mutate_services
+from dashboard.services import clean_service, mutate_services, restore_services_backup, services_backup
 
 
 def close_add_service_dialog() -> None:
@@ -161,16 +161,38 @@ def render_sidebar(services: list[dict[str, str]]) -> tuple[list[dict[str, str]]
     st.markdown("<div class='side-brand'><span>◈</span> HOME LAB</div>", unsafe_allow_html=True)
     st.caption("NODE ROUTING / LOCAL NETWORK")
     st.markdown("<div class='sidebar-rule'></div>", unsafe_allow_html=True)
-    st.markdown("<p class='sidebar-label'>SERVICE ENDPOINTS</p>", unsafe_allow_html=True)
+    with st.expander(f"Service endpoints ({len(services)})", expanded=False):
+        for service in services:
+            endpoint_key = f"endpoint_{service['id']}"
+            if endpoint_key not in st.session_state:
+                st.session_state[endpoint_key] = service["url"]
+            service["url"] = st.text_input(service["name"], key=endpoint_key)
+        if st.button("Save endpoint changes", use_container_width=True):
+            mutate_services(endpoints={s["id"]: s["url"] for s in services})
+            st.success("Endpoints saved")
 
-    for service in services:
-        endpoint_key = f"endpoint_{service['id']}"
-        if endpoint_key not in st.session_state:
-            st.session_state[endpoint_key] = service["url"]
-        service["url"] = st.text_input(service["name"], key=endpoint_key)
-    if st.button("Save endpoint changes", use_container_width=True):
-        mutate_services(endpoints={s["id"]: s["url"] for s in services})
-        st.success("Endpoints saved")
+    with st.expander("Service backup", expanded=False):
+        st.download_button(
+            "Download services backup",
+            data=services_backup(saved_services),
+            file_name="glassscout-services-backup.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+        uploaded = st.file_uploader("Choose backup", type=["json"], key="services_backup_upload")
+        st.caption("Restoring replaces the current service list after the file is validated.")
+        if st.button("Restore services backup", disabled=uploaded is None, use_container_width=True):
+            try:
+                restored = restore_services_backup(uploaded.getvalue())
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                for key in list(st.session_state):
+                    if key.startswith("endpoint_"):
+                        del st.session_state[key]
+                st.session_state.pop("service_board_event", None)
+                st.toast(f"Restored {len(restored)} services", icon="✅")
+                st.rerun(scope="app")
 
     st.markdown("<div class='sidebar-rule'></div>", unsafe_allow_html=True)
     check_heartbeats = st.toggle("Check node heartbeat", value=False)

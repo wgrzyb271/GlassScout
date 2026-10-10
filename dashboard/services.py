@@ -47,6 +47,41 @@ def save_services(services: list[dict[str, str]]) -> None:
         atomic_json(DATA_FILE, [clean_service(item) for item in services])
 
 
+def services_backup(services: list[dict[str, str]]) -> str:
+    """Create a portable, versioned backup of all service card fields."""
+    return json.dumps({"version": 1, "services": [clean_service(item) for item in services]}, indent=2, ensure_ascii=False)
+
+
+def restore_services_backup(payload: bytes | str) -> list[dict[str, str]]:
+    """Validate and replace services from a GlassScout backup."""
+    if isinstance(payload, bytes):
+        if len(payload) > 2_000_000:
+            raise ValueError("The backup file is too large.")
+        payload = payload.decode("utf-8")
+    try:
+        document = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Choose a valid GlassScout JSON backup.") from exc
+    raw = document.get("services") if isinstance(document, dict) else document
+    if not isinstance(raw, list) or len(raw) > 2000:
+        raise ValueError("The backup must contain a services list (maximum 2000 entries).")
+    restored = []
+    ids = set()
+    for item in raw:
+        if not isinstance(item, dict) or not str(item.get("name", "")).strip() or not str(item.get("url", "")).strip():
+            raise ValueError("Every backed-up service must have a name and URL.")
+        service = clean_service(item)
+        parsed = urlparse(normalized_url(service["url"]))
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError(f"Invalid service URL: {service['url'][:120]}")
+        if service["id"] in ids:
+            raise ValueError("The backup contains duplicate service IDs.")
+        ids.add(service["id"])
+        restored.append(service)
+    save_services(restored)
+    return restored
+
+
 def mutate_services(*, endpoints: dict[str, str] | None = None, add: dict | None = None, remove: str | None = None, updates: dict[str, dict] | None = None) -> None:
     """Apply UI changes to the latest file, preserving background additions."""
     with data_lock(DATA_FILE.parent):
