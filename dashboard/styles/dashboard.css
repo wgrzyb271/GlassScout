@@ -38,9 +38,7 @@ html, body, #root, .stApp, [data-testid="stAppViewContainer"] {
   object-position: center !important;
   filter: brightness(.78) saturate(.84) contrast(1.08);
 }
-.app-static-bg { display: none; }
-.safari-browser .app-static-bg { display: block; }
-.safari-browser .app-video-bg { display: none; }
+.app-static-bg { display: block; z-index: -4; }
 /* Streamlit fades stale elements during reruns. Opacity on these wrappers
    creates a stacking context, lifting fixed backgrounds above their dark wash.
    Keep decorative layers and the transparent board at a stable opacity. */
