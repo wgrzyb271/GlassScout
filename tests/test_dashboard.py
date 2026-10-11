@@ -3,6 +3,7 @@
 from pathlib import Path
 import json
 from tempfile import TemporaryDirectory
+from threading import Thread
 import unittest
 from unittest.mock import patch
 
@@ -211,6 +212,29 @@ render_progress(record, False)
         self.assertEqual(len(app.get("progress")), 1)
         self.assertIn("2 / 4", app.get("progress")[0].proto.text)
         self.assertTrue(any("interrupted" in m.value for m in app.markdown))
+
+    def test_stop_scan_requires_confirmation(self):
+        from dashboard import agent_panel, services
+        from discovery.models import RunRecord
+        from discovery.runner import JobManager
+        with TemporaryDirectory() as directory:
+            data = Path(directory)
+            job = JobManager(data)
+            job.record = RunRecord(phase="Scanning and identifying services")
+            job.store.save_run(job.record)
+            job.thread = Thread(target=job.stop_event.wait, daemon=True)
+            job.thread.start()
+            service_file = data / "services.json"
+            with patch.object(agent_panel, "dependencies_available", return_value=True), patch.object(
+                agent_panel, "manager", return_value=job
+            ), patch.object(agent_panel, "DATA_FILE", service_file), patch.object(services, "DATA_FILE", service_file):
+                app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py")).run(timeout=20)
+                next(button for button in app.button if button.label == "Stop scan").click().run(timeout=20)
+                self.assertFalse(job.stop_event.is_set())
+                self.assertTrue(any(button.label == "Confirm stop" for button in app.button))
+                next(button for button in app.button if button.label == "Confirm stop").click().run(timeout=20)
+                self.assertTrue(job.stop_event.is_set())
+            job.thread.join(2)
 
     def test_missing_agent_dependencies_keeps_dashboard_usable(self):
         from dashboard import agent_panel

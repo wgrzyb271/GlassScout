@@ -90,6 +90,10 @@ def render_discovery_dialog() -> None:
     pending = previous_run.get("pending_urls", [])
     pending_ports = previous_run.get("pending_port_ranges", [])
     previous_networks = previous_run.get("scan_networks", [])
+    previous_unlimited = bool(previous_run.get(
+        "unlimited_run",
+        previous_run.get("timeout_seconds") == 0 and previous_networks,
+    ))
     options = networks()
     defaults = list(dict.fromkeys(n["cidr"] for n in options if n["default"] and n["kind"] == "LAN"))
     if not defaults:
@@ -98,20 +102,23 @@ def render_discovery_dialog() -> None:
 
     st.markdown("#### 1. Choose where to look")
     st.caption("Enter a known local URL, scan one or more local subnets, or use both.")
-    resume = st.checkbox(
-        f"Resume remaining addresses ({len(pending)})", value=False,
-        disabled=job.running or not pending,
-        help="Continues saved addresses without repeating subnet scanning. Uses the provider and limits selected below.",
+    unfinished = bool(pending or pending_ports)
+    resume_all = st.checkbox(
+        f"Resume all unfinished work ({len(pending)} addresses, {len(pending_ports)} port batches)",
+        value=unfinished, disabled=job.running or not unfinished,
+        help="Continues both the saved AI queue and unfinished TCP batches. Completed work is not repeated.",
     )
-    resume_ports = st.checkbox(
-        f"Resume unfinished port scan ({len(pending_ports)} batches)", value=False,
-        disabled=job.running or not pending_ports or not previous_networks,
-        help="Continues the saved port batches. At most the interrupted batch is repeated, not the complete port range.",
-    )
+    replace_unfinished = False
+    if unfinished and not resume_all:
+        replace_unfinished = st.checkbox(
+            "Start a new scan and replace the unfinished queue",
+            value=False, disabled=job.running,
+            help="Use only when you intentionally do not want to resume the saved work.",
+        )
     seed = st.text_area(
         "Known service URLs",
         placeholder="http://192.168.1.40:3000\nhttp://127.0.0.1:8765",
-        disabled=job.running,
+        disabled=job.running or resume_all,
         help="One HTTP or HTTPS URL per line. This is the fastest option when you already know an address.",
     )
     if not shutil.which("nmap"):
@@ -122,12 +129,12 @@ def render_discovery_dialog() -> None:
         list(labels),
         default=defaults,
         format_func=lambda value: labels[value],
-        disabled=job.running or resume_ports or not shutil.which("nmap"),
+        disabled=job.running or resume_all or not shutil.which("nmap"),
     )
     custom = st.text_input(
         "Another local network (optional)",
         placeholder="192.168.1.0/24",
-        disabled=job.running or resume_ports or not shutil.which("nmap"),
+        disabled=job.running or resume_all or not shutil.which("nmap"),
         help="Use CIDR notation. A smaller range makes discovery faster.",
     )
     if not options:
@@ -156,10 +163,18 @@ def render_discovery_dialog() -> None:
         help="Loaded from .streamlit/secrets.toml and editable for this session.",
     )
     key = configured_key(provider)
+    fallback_provider = "gemini" if provider == "groq" else "groq"
+    fallback_key = configured_key(fallback_provider)
+    fallback_model = (configured_value("GEMINI_MODEL", "gemini-3.6-flash") if fallback_provider == "gemini"
+                      else configured_value("GROQ_MODEL", "openai/gpt-oss-120b"))
     if key:
         st.caption(f"{pname} API key is configured on the server.")
     else:
         st.warning(f"{pname} API key is not configured on the server.")
+    if fallback_key:
+        st.caption(f"Fallback enabled: {provider_names[fallback_provider]} · {fallback_model}")
+    else:
+        st.caption(f"No {provider_names[fallback_provider]} key configured; fallback is unavailable.")
 
     with st.expander("Advanced scan settings", expanded=False):
         ports = st.text_input("TCP ports", value="1-65535", disabled=job.running)
@@ -180,10 +195,12 @@ def render_discovery_dialog() -> None:
 
     st.caption("Full network scan uses all TCP ports, waits for AI quota resets, and runs until every port batch and discovered address finishes or you stop it.")
     start_col, full_col, cancel_col = st.columns(3)
-    start = start_col.button("Start discovery", type="primary", use_container_width=True, disabled=job.running)
+    unsafe_new = unfinished and not resume_all and not replace_unfinished
+    start_label = "Resume unfinished work" if resume_all else "Start discovery"
+    start = start_col.button(start_label, type="primary", use_container_width=True, disabled=job.running or unsafe_new)
     full_scan = full_col.button(
         "Scan entire network", use_container_width=True,
-        disabled=job.running or not shutil.which("nmap"),
+        disabled=job.running or resume_all or unsafe_new or not shutil.which("nmap"),
         help="Scans TCP ports 1–65535 on the selected networks without a scan-time limit.",
     )
     cancel = cancel_col.button("Cancel", use_container_width=True)
@@ -194,25 +211,28 @@ def render_discovery_dialog() -> None:
         try:
             chosen_networks = selected + ([custom.strip()] if custom.strip() else [])
             settings = Settings(
-                networks=chosen_networks if full_scan else (previous_networks if resume_ports else ([] if resume else chosen_networks)),
+                networks=(previous_networks if resume_all and pending_ports else
+                          (chosen_networks if full_scan else chosen_networks)),
                 seed_urls=([value.strip() for value in seed.splitlines() if value.strip()] if full_scan else
-                           (pending if resume else [value.strip() for value in seed.splitlines() if value.strip()])),
+                           (pending if resume_all else [value.strip() for value in seed.splitlines() if value.strip()])),
                 provider=provider,
                 model=model.strip(),
-                ports="1-65535" if full_scan else ((previous_run.get("scan_ports") or ports.strip()) if resume_ports else ports.strip()),
+                fallback_provider=fallback_provider if fallback_key else None,
+                fallback_model=fallback_model if fallback_key else "",
+                ports="1-65535" if full_scan else ((previous_run.get("scan_ports") or ports.strip()) if resume_all and pending_ports else ports.strip()),
                 run_seconds=int(minutes * 60),
                 allow_self_signed=self_signed,
                 service_detection=service_detection,
                 browser_fallback=browser_fallback,
                 skip_active_services=skip_active,
-                seed_urls_are_manual=full_scan or not resume,
-                scan_chunks=[] if full_scan else (pending_ports if resume_ports else []),
-                unlimited_run=full_scan,
+                seed_urls_are_manual=full_scan or not resume_all,
+                scan_chunks=[] if full_scan else (pending_ports if resume_all else []),
+                unlimited_run=full_scan or (resume_all and previous_unlimited),
                 max_endpoints=256 if full_scan else 64,
                 total_model_calls=300 if full_scan else 60,
                 input_chars=2_000_000 if full_scan else 600_000,
             )
-            job.start(settings, key)
+            job.start(settings, key, fallback_api_key=fallback_key)
             close_discovery_dialog()
             st.rerun(scope="app")
         except ValueError as exc:
@@ -282,8 +302,23 @@ def render_agent_results() -> None:
         close_discovery_dialog()
         st.session_state["show_discovery_results"] = True
         st.rerun(scope="app")
-    if job.running and st.button("Stop scan", use_container_width=True):
-        job.stop()
+    if job.running:
+        if not st.session_state.get("confirm_stop_discovery"):
+            if st.button("Stop scan", use_container_width=True):
+                st.session_state["confirm_stop_discovery"] = True
+                st.rerun()
+        else:
+            st.warning("Stop scanning? Completed results and the unfinished queue will be kept.")
+            stop_col, keep_col = st.columns(2)
+            if stop_col.button("Confirm stop", type="primary", use_container_width=True):
+                job.stop()
+                st.session_state.pop("confirm_stop_discovery", None)
+                st.rerun()
+            if keep_col.button("Keep scanning", use_container_width=True):
+                st.session_state.pop("confirm_stop_discovery", None)
+                st.rerun()
+    else:
+        st.session_state.pop("confirm_stop_discovery", None)
 
 
 _RESULTS_DIALOG_OPTIONS = {"on_dismiss": close_results_dialog} if _DIALOG_SUPPORTS_ON_DISMISS else {}
@@ -299,13 +334,14 @@ def render_results_dialog() -> None:
     record = run.model_dump() if run else data["run"]
     findings = [Finding.model_validate(v) for v in data["findings"].values()]
     pending = [f for f in findings if f.state == "review"]
+    rejected = [f for f in findings if f.state == "rejected"]
     if record:
         port_batches = len(record.get("pending_port_ranges", []))
         st.caption(f"{record['added']} added · {len(pending)} need review · {len(record.get('pending_urls', []))} addresses remaining · {port_batches} port batches remaining")
         if record.get("pending_urls") and not job.running:
-            st.caption("To continue, choose Resume remaining addresses in Discover services.")
+            st.caption("To continue, choose Resume all unfinished work in Discover services.")
         if record.get("pending_port_ranges") and not job.running:
-            st.caption("To continue port coverage, choose Resume unfinished port scan in Discover services.")
+            st.caption("To continue port coverage, choose Resume all unfinished work in Discover services.")
     if pending:
         choices = {f.id: f for f in pending}
         selected = st.selectbox(
@@ -314,6 +350,8 @@ def render_results_dialog() -> None:
         )
         finding = choices[selected]
         st.caption(finding.reason)
+        if finding.ai_provider:
+            st.caption(f"AI identification: {finding.ai_provider.title()} · {finding.ai_model}")
         with st.form(f"review_{finding.id}"):
             name = st.text_input("Service name", value=finding.proposal.name if finding.proposal else "Unknown service")
             url = st.text_input("Panel URL", value=finding.proposal.url if finding.proposal else finding.endpoint)
@@ -328,6 +366,18 @@ def render_results_dialog() -> None:
                 st.error(str(exc))
     else:
         st.info("No services waiting for review.")
+    if rejected:
+        with st.expander(f"Rejected services ({len(rejected)})"):
+            rejected_choices = {f.id: f for f in rejected}
+            rejected_id = st.selectbox(
+                "Rejected service", list(rejected_choices), key="rejected_service",
+                format_func=lambda key: f"{rejected_choices[key].proposal.name if rejected_choices[key].proposal else 'Unknown service'} · {rejected_choices[key].endpoint}",
+            )
+            rejected_finding = rejected_choices[rejected_id]
+            st.caption(rejected_finding.reason)
+            if st.button("Restore to review", disabled=job.running, use_container_width=True):
+                job.store.restore_rejected(rejected_finding.endpoint)
+                st.rerun(scope="app")
     download_col, delete_col = st.columns(2)
     download_col.download_button(
         "Download discovery report", data=json.dumps(data, indent=2, ensure_ascii=False),

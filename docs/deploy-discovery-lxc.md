@@ -84,9 +84,10 @@ Automatyczne dodanie wymaga odrębnych, zgodnych dowodów i ponownej weryfikacji
 Dla znanego firmware takim drugim dowodem może być osobny zasób firmware albo
 ponownie sprawdzone przekierowanie z adresu routera do oznaczonego panelu.
 
-Po przerwaniu nowego skanu opcja **Resume remaining addresses** pozwala wznowić
-zapisane adresy bez ponownego skanowania portów. Starszy raport sprzed tej zmiany
-nie zawiera kolejki i nie można go w ten sposób wznowić.
+Po przerwaniu skanu opcja **Resume all unfinished work** wznawia jednocześnie
+zapisane adresy i niedokończone partie portów. Pełny skan zachowuje przy tym tryb
+bez limitu czasu. Rozpoczęcie nowego skanu przy istniejącej kolejce wymaga osobnego
+potwierdzenia jej zastąpienia.
 
 ## 6. Szyfrowane klucze API w systemd
 

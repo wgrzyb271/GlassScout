@@ -20,6 +20,10 @@ def render_progress(record: dict, running: bool, *, compact: bool = False) -> No
         label = record["phase"] if running else labels.get(status, "Scan interrupted")
         st.caption(f"{label} · {record['added']} added")
         if running:
+            scanner_status = record.get("scanner_status")
+            ai_status = record.get("ai_status")
+            if scanner_status or ai_status:
+                st.caption(f"Scanner: {scanner_status or 'idle'} · AI: {ai_status or 'idle'}")
             scan_total = record.get("scan_batches_total", 0)
             scan_completed = record.get("scan_batches_completed", 0)
             if scan_total:
@@ -36,6 +40,16 @@ def render_progress(record: dict, running: bool, *, compact: bool = False) -> No
         return
     st.write(f"{record['phase']} · {status}")
     st.caption(record["detail"])
+    if record.get("scanner_status") or record.get("ai_status"):
+        st.caption(
+            f"Scanner: {record.get('scanner_status') or 'idle'} · "
+            f"AI: {record.get('ai_status') or 'idle'}"
+        )
+    if record.get("active_ai_provider"):
+        st.caption(
+            f"AI route: {record['active_ai_provider'].title()} · {record.get('active_ai_model') or 'default model'}"
+            f" · {record.get('fallback_count', 0)} fallback switch(es)"
+        )
     if record.get("skipped_active_services"):
         st.caption(f"Skipped {record['skipped_active_services']} active saved endpoint(s).")
 

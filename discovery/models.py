@@ -49,6 +49,8 @@ class Settings(Contract):
     seed_urls: list[str] = Field(default_factory=list, max_length=512)
     model: str = Field(default="gemini-3.6-flash", min_length=1, max_length=100)
     provider: Literal["gemini", "groq"] = "gemini"
+    fallback_provider: Literal["gemini", "groq"] | None = None
+    fallback_model: str = Field(default="", max_length=100)
     ports: str = "1-65535"
     run_seconds: int = Field(default=600, ge=30, le=3600)
     service_seconds: int = Field(default=90, ge=5, le=300)
@@ -166,6 +168,8 @@ class Finding(Contract):
     observations: list[Observation] = Field(default_factory=list)
     fingerprint: str = ""
     service_id: str = ""
+    ai_provider: str = ""
+    ai_model: str = ""
     updated_at: str = Field(default_factory=now)
 
 
@@ -183,6 +187,7 @@ class RunRecord(Contract):
     added: int = 0
     warnings: list[str] = Field(default_factory=list)
     timeout_seconds: float = 0
+    unlimited_run: bool = False
     remaining_seconds: float | None = None
     scan_timeout_seconds: float = 0
     scan_remaining_seconds: float | None = None
@@ -194,3 +199,9 @@ class RunRecord(Contract):
     scan_batches_total: int = 0
     scan_batches_completed: int = 0
     scan_detail: str = ""
+    scanner_status: str = "idle"
+    ai_status: str = "idle"
+    active_ai_provider: str = ""
+    active_ai_model: str = ""
+    fallback_count: int = 0
+    provider_retry_at: dict[str, str] = Field(default_factory=dict)

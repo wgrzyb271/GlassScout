@@ -30,6 +30,58 @@ ROUTER_MARKERS = {
     "OPNsense Router": r"\bOPNsense\b",
 }
 
+# Product-specific markers used for local, no-AI identification. A matching
+# panel alone is never sufficient: verification also requires a different
+# JSON or static resource with the same product identity.
+APPLICATION_MARKERS = {
+    "Jellyfin": r"\bJellyfin(?:\s+Server)?\b",
+    "Synology DSM": r"\bSynology\s+(?:DSM|DiskStation|DiskStation\s+Manager)\b|\bDiskStation\s+Manager\b|\bSYNO\.SDS\b",
+    "Plex": r"\bPlex(?:\s+Media\s+Server)?\b",
+    "Emby": r"\bEmby(?:\s+Server)?\b",
+    "TrueNAS": r"\bTrueNAS(?:\s+(?:CORE|SCALE))?\b",
+    "QNAP QTS": r"\bQNAP\b.*\bQTS\b|\bQTS\b.*\bQNAP\b",
+    "OpenMediaVault": r"\bopenmediavault\b",
+    "Home Assistant": r"\bHome\s+Assistant\b",
+    "Node-RED": r"\bNode-RED\b",
+    "Zigbee2MQTT": r"\bZigbee2MQTT\b",
+    "Frigate": r"\bFrigate(?:\s+NVR)?\b",
+    "Portainer": r"\bPortainer\b",
+    "Cockpit": r"\bCockpit\b.*\bLinux\b|\bCockpit\s+Web\s+Console\b",
+    "Grafana": r"\bGrafana\b",
+    "Prometheus": r"\bPrometheus\s+Time\s+Series\b|\bPrometheus\s+Monitoring\b",
+    "Netdata": r"\bNetdata\b",
+    "Uptime Kuma": r"\bUptime\s+Kuma\b",
+    "Nextcloud": r"\bNextcloud\b",
+    "Immich": r"\bImmich\b",
+    "PhotoPrism": r"\bPhotoPrism\b",
+    "Navidrome": r"\bNavidrome\b",
+    "Audiobookshelf": r"\bAudiobookshelf\b",
+    "Gitea": r"\bGitea\b",
+    "Forgejo": r"\bForgejo\b",
+    "GitLab": r"\bGitLab\b",
+    "Jenkins": r"\bJenkins\b",
+    "Sonarr": r"\bSonarr\b",
+    "Radarr": r"\bRadarr\b",
+    "Lidarr": r"\bLidarr\b",
+    "qBittorrent": r"\bqBittorrent\b",
+    "SABnzbd": r"\bSABnzbd\b",
+    "Traefik": r"\bTraefik\b",
+    "Nginx Proxy Manager": r"\bNginx\s+Proxy\s+Manager\b",
+    "MinIO": r"\bMinIO\b",
+    "UniFi Network": r"\bUniFi\s+(?:Network|OS|Console)\b",
+    "HP Printer": r"\bHP\s+(?:Embedded\s+Web\s+Server|EWS|LaserJet|OfficeJet|PageWide)\b",
+    "Brother Printer": r"\bBrother\b.*\b(?:Web\s+Based\s+Management|Printer)\b",
+    "Canon Printer": r"\bCanon\b.*\b(?:Remote\s+UI|Printer)\b",
+    "Epson Printer": r"\bEpson\b.*\b(?:Web\s+Config|Printer)\b",
+    "Xerox Printer": r"\bXerox\b.*\b(?:CentreWare|Embedded\s+Web\s+Server)\b",
+    "Kyocera Printer": r"\bKYOCERA\b.*\bCommand\s+Center\b",
+    "Ricoh Printer": r"\bRICOH\b.*\bWeb\s+Image\s+Monitor\b",
+    "Konica Minolta Printer": r"\bKONICA\s+MINOLTA\b.*\bWeb\s+Connection\b",
+    "Lexmark Printer": r"\bLexmark\b.*\bEmbedded\s+Web\s+Server\b",
+}
+
+PRINTER_NAMES = {name for name in APPLICATION_MARKERS if name.endswith(" Printer")}
+
 ROUTER_WORDS = re.compile(
     r"\b(?:router|routeros|gateway|firewall|openwrt|pfsense|opnsense|fritz!?box|webfig)\b",
     re.I,
@@ -63,9 +115,29 @@ def router_names_match(a: str, b: str) -> bool:
     return bool(known_a and known_a == known_b)
 
 
+def application_identity(observation: Observation) -> str:
+    evidence = f"{observation.product}\n{observation.title}\n{observation.text}"
+    matches = [name for name, pattern in APPLICATION_MARKERS.items() if re.search(pattern, evidence, re.I)]
+    return matches[0] if len(matches) == 1 else ""
+
+
+def is_application_name(name: str) -> bool:
+    return name in APPLICATION_MARKERS
+
+
+def application_names_match(a: str, b: str) -> bool:
+    return bool(a and b and a == b and is_application_name(a))
+
+
+def is_printer_name(name: str) -> bool:
+    return name in PRINTER_NAMES
+
+
 def panel_matches(name: str, observation: Observation) -> bool:
     if is_router_name(name):
         return router_names_match(name, router_identity(observation))
+    if is_application_name(name):
+        return application_names_match(name, application_identity(observation))
     return in_title(name, observation.title)
 
 
@@ -87,6 +159,9 @@ def in_title(name: str, title: str) -> bool:
 
 
 def identity(observation: Observation) -> str:
+    native = application_identity(observation)
+    if native:
+        return native
     if observation.product:
         return observation.product
     path = urlsplit(observation.url).path.rstrip("/")
@@ -125,6 +200,14 @@ def assess(proposal: Proposal, observations: list[Observation]) -> tuple[bool, s
                             and 200 <= o.status < 400 and redirects_to(o, panel.url)]
         if redirect_sources:
             return True, "The router address redirects to a separately fetched, matching branded login panel."
+    if is_application_name(proposal.name):
+        assets = [o for o in successful if o.url != panel.url and o.digest != panel.digest
+                  and any(t in o.content_type for t in ("javascript", "css", "json"))
+                  and application_identity(o)]
+        if any(not application_names_match(proposal.name, application_identity(o)) for o in assets):
+            return False, "Application panel and separate identity resource disagree."
+        if any(application_names_match(proposal.name, application_identity(o)) for o in assets):
+            return True, "Application panel and separate identity resource contain matching product markers."
     if not any(names_match(proposal.name, identity(o)) and o.digest != panel.digest for o in machine):
         return False, "No independent machine-readable identity confirms the page title. Please check this service."
     return True, "Fresh panel and separate machine-readable identity agree. This is network fingerprint verification, not proof of software authenticity."
@@ -155,13 +238,16 @@ async def verify(proposal: Proposal, probe: Probe) -> tuple[bool, str]:
                         or (is_router_name(proposal.name) and (
                             (200 <= o.status < 300 and router_names_match(proposal.name, router_identity(o))
                              and any(t in o.content_type for t in ("javascript", "css", "json")))
-                            or (200 <= o.status < 400 and redirects_to(o, proposal.url))))))
+                            or (200 <= o.status < 400 and redirects_to(o, proposal.url))))
+                        or (is_application_name(proposal.name) and 200 <= o.status < 300
+                            and application_names_match(proposal.name, application_identity(o))
+                            and any(t in o.content_type for t in ("javascript", "css", "json")))))
     panel = next(o for o in reversed(probe.observations) if o.url == proposal.url)
     if panel.source == "browser":
         from discovery.browser import render_page
         fresh_panel = await render_page(probe, proposal.url, lambda *_: None)
         if fresh_panel is None:
-            return False, "Could not refresh the rendered router panel; manual review required."
+            return False, "Could not refresh the rendered application panel; manual review required."
     else:
         fresh_panel = await probe.fetch(proposal.url, fresh=True)
     fresh_identity = await probe.fetch(machine.url, fresh=True)

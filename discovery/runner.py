@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 import ipaddress
 import json
 from pathlib import Path
@@ -59,13 +60,13 @@ class JobManager:
             self.store.save_run(self.record)
         self.store.event("warning", message)
 
-    def start(self, settings: Settings, api_key: str, model=None) -> None:
+    def start(self, settings: Settings, api_key: str, model=None, *, fallback_api_key: str = "") -> None:
         with self.lock:
             if self.running:
                 raise ValueError("A discovery run is already active.")
             if settings.networks and not shutil.which("nmap"):
                 raise ValueError("Install Nmap for subnet discovery, or deselect subnets and enter a test URL.")
-            if not api_key.strip() and model is None:
+            if not api_key.strip() and not fallback_api_key.strip() and model is None:
                 raise ValueError("Enter an API key.")
             self.stop_event = Event()
             self.deadline = None if settings.unlimited_run else monotonic() + settings.run_seconds
@@ -75,6 +76,7 @@ class JobManager:
             resuming_scan = bool(settings.scan_chunks and previous_run.get("pending_port_ranges"))
             self.record = RunRecord(
                 timeout_seconds=0 if settings.unlimited_run else settings.run_seconds,
+                unlimited_run=settings.unlimited_run,
                 pending_urls=settings.seed_urls,
                 scan_networks=settings.networks or (previous_run.get("scan_networks", []) if preserve_scan_checkpoint else []),
                 scan_ports=(settings.ports if settings.networks else previous_run.get("scan_ports", "")) if preserve_scan_checkpoint or settings.networks else "",
@@ -83,33 +85,54 @@ class JobManager:
                 scan_batches_completed=previous_run.get("scan_batches_completed", 0) if resuming_scan or preserve_scan_checkpoint else 0,
             )
             self.store.save_run(self.record)
-            self.thread = Thread(target=self._worker, args=(settings, api_key, model), daemon=True, name="glassscout-discovery")
+            self.thread = Thread(
+                target=self._worker, args=(settings, api_key, model, fallback_api_key),
+                daemon=True, name="glassscout-discovery",
+            )
             self.thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
 
-    def _worker(self, settings: Settings, key: str, model=None) -> None:
+    def _worker(self, settings: Settings, key: str, model=None, fallback_key: str = "") -> None:
         budget = Budget(settings, self.stop_event)
         budget.deadline = self.deadline if self.deadline is not None else float("inf")
         try:
-            asyncio.run(self._run(settings, key, budget, model))
+            asyncio.run(self._run(settings, key, budget, model, fallback_key))
             budget.check()
             self.update(status="partial" if self.record.warnings else "completed", phase="Finished")
         except LimitReached as exc:
-            self.update(status="stopped" if self.stop_event.is_set() else "partial", phase=str(exc))
+            self.update(
+                status="stopped" if self.stop_event.is_set() else "partial",
+                phase=str(exc), ai_status="stopped" if self.stop_event.is_set() else "paused",
+                scanner_status="stopped" if self.stop_event.is_set() and self.record.scanner_status == "scanning" else self.record.scanner_status,
+            )
         except ModelUnavailable as exc:
             self.warning(str(exc))
-            self.update(status="partial", phase="Model unavailable — results saved")
+            self.update(status="partial", phase="Model unavailable — results saved", ai_status="error")
         except Exception as exc:
             self.store.error("discovery-run", exc, {"phase": self.record.phase if self.record else "unknown"})
             self.store.event("error", f"Run failed: {type(exc).__name__}")
-            self.update(status="failed", phase=f"Run failed: {type(exc).__name__}", detail="See local diagnostics; existing services were kept.")
+            self.update(status="failed", phase=f"Run failed: {type(exc).__name__}", detail="See local diagnostics; existing services were kept.", ai_status="error")
         finally:
             self.update(finished_at=now(), model_calls=budget.model_calls, input_chars=budget.input_chars)
 
-    async def _run(self, settings: Settings, key: str, budget: Budget, model=None) -> None:
-        model = model or create_model(settings.provider, key, settings.model)
+    async def _run(self, settings: Settings, key: str, budget: Budget, model=None, fallback_key: str = "") -> None:
+        routes = []
+        if model is not None:
+            routes.append((settings.provider, settings.model, model))
+        else:
+            if key.strip():
+                routes.append((settings.provider, settings.model, create_model(settings.provider, key, settings.model)))
+            if (fallback_key.strip() and settings.fallback_provider
+                    and settings.fallback_provider != settings.provider and settings.fallback_model):
+                routes.append((
+                    settings.fallback_provider,
+                    settings.fallback_model,
+                    create_model(settings.fallback_provider, fallback_key, settings.fallback_model),
+                ))
+        if not routes:
+            raise ModelUnavailable("No configured AI provider is available.")
         active = await asyncio.to_thread(self._active_saved_endpoints) if settings.skip_active_services and settings.networks else set()
         skipped_active: set[tuple[str, int]] = set()
         loop = asyncio.get_running_loop()
@@ -163,6 +186,10 @@ class JobManager:
             endpoints=len(known_endpoints), pending_urls=list(pending),
             phase="Scanning and identifying services" if chunks else "Identifying services",
             scan_detail=f"{', '.join(settings.networks)} · {settings.ports}" if chunks else "",
+            scanner_status="scanning" if chunks else "not requested",
+            ai_status="identifying",
+            active_ai_provider=routes[0][0],
+            active_ai_model=routes[0][1],
         )
         if chunks:
             initial_values["pending_port_ranges"] = chunks
@@ -213,6 +240,7 @@ class JobManager:
             finally:
                 with self.lock:
                     self.scan_deadline = None
+                self.update(scanner_status="stopped" if self.stop_event.is_set() else ("error" if scan_errors else "completed"))
                 loop.call_soon_threadsafe(endpoint_queue.put_nowait, sentinel)
 
         scanner = asyncio.create_task(asyncio.to_thread(scan_worker)) if chunks else None
@@ -222,10 +250,18 @@ class JobManager:
         consumer_error: BaseException | None = None
         internal_stop = False
         processed = 0
+        provider_cooldowns: dict[str, float] = {}
 
-        async def wait_for_quota(seconds: float, endpoint: str) -> None:
+        def set_provider_cooldown(provider: str, seconds: float) -> None:
+            provider_cooldowns[provider] = monotonic() + seconds
+            retry_at = dict(self.record.provider_retry_at)
+            retry_at[provider] = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+            self.update(provider_retry_at=retry_at)
+
+        async def wait_for_provider(seconds: float, endpoint: str, provider: str, *, quota: bool) -> None:
             wait_until = monotonic() + seconds
-            self.store.event("provider_wait", f"AI quota exhausted; retrying after the provider reset ({int(seconds + .999)} seconds).")
+            reason = "quota reset" if quota else "provider recovery"
+            self.store.event("provider_wait", f"{provider.title()} AI waiting for {reason} ({int(seconds + .999)} seconds).")
             last_bucket = None
             while True:
                 budget.check()
@@ -238,8 +274,9 @@ class JobManager:
                 if bucket != last_bucket:
                     last_bucket = bucket
                     self.update(
-                        phase="Waiting for AI quota reset",
-                        detail=f"Retrying {endpoint} in {int(remaining + .999)} seconds",
+                        phase="Scanning continues · AI waiting" if scanner is not None and not scanner.done() else "AI waiting",
+                        detail=f"{provider.title()} retry for {endpoint} in {int(remaining + .999)} seconds",
+                        ai_status=f"waiting {int(remaining + .999)}s for {provider.title()}",
                         model_calls=budget.model_calls,
                         input_chars=budget.input_chars,
                     )
@@ -259,18 +296,53 @@ class JobManager:
                     continue
                 budget.check()
                 self.update(detail=endpoint)
+                route_index = next((index for index, route in enumerate(routes)
+                                    if provider_cooldowns.get(route[0], 0) <= monotonic()), 0)
+                quota_waited: set[int] = set()
                 while True:
+                    provider_name, model_name, active_model = routes[route_index]
+                    self.update(
+                        ai_status=f"identifying with {provider_name.title()}",
+                        active_ai_provider=provider_name,
+                        active_ai_model=model_name,
+                    )
                     try:
                         await self._identify_endpoint(
-                            endpoint, settings, budget, model,
-                            successful_transports,
+                            endpoint, settings, budget, active_model,
+                            successful_transports, provider_name, model_name,
                         )
+                        provider_cooldowns.pop(provider_name, None)
                         break
                     except ProviderRateLimited as exc:
+                        if route_index in quota_waited and route_index + 1 < len(routes):
+                            set_provider_cooldown(provider_name, max(45, exc.retry_after))
+                            route_index += 1
+                            self.update(fallback_count=self.record.fallback_count + 1)
+                            self.store.event("provider_fallback", f"{provider_name.title()} still unavailable after its reset; switching to {routes[route_index][0].title()}.")
+                            continue
+                        if not settings.unlimited_run:
+                            if route_index + 1 < len(routes):
+                                route_index += 1
+                                self.update(fallback_count=self.record.fallback_count + 1)
+                                self.store.event("provider_fallback", f"Switching AI identification to {routes[route_index][0].title()}.")
+                                continue
+                            raise
+                        quota_waited.add(route_index)
+                        await wait_for_provider(exc.retry_after, endpoint, provider_name, quota=True)
+                        self.update(phase="Scanning and identifying services", detail=endpoint)
+                    except ModelUnavailable:
+                        set_provider_cooldown(provider_name, 45)
+                        if route_index + 1 < len(routes):
+                            route_index += 1
+                            self.update(fallback_count=self.record.fallback_count + 1)
+                            self.store.event("provider_fallback", f"Switching AI identification to {routes[route_index][0].title()}.")
+                            continue
                         if not settings.unlimited_run:
                             raise
-                        await wait_for_quota(exc.retry_after, endpoint)
-                        self.update(phase="Scanning and identifying services", detail=endpoint)
+                        # Keep both the scanner and persisted endpoint queue alive.
+                        # A later pass starts with the selected primary provider again.
+                        await wait_for_provider(45, endpoint, provider_name, quota=False)
+                        route_index = 0
                 processed += 1
                 processed_endpoints.add(endpoint)
                 if endpoint in pending:
@@ -298,13 +370,14 @@ class JobManager:
                 self.stop_event.clear()
 
         if consumer_error is not None:
+            self.update(ai_status="stopped" if self.stop_event.is_set() else "error")
             raise consumer_error
         if scan_errors:
             raise scan_errors[0]
         self.update(
             phase="Finished", processed=processed,
             pending_urls=list(pending), model_calls=budget.model_calls,
-            input_chars=budget.input_chars,
+            input_chars=budget.input_chars, ai_status="completed",
         )
 
     async def _identify_endpoint(
@@ -314,6 +387,8 @@ class JobManager:
         budget: Budget,
         model,
         successful_transports: set[tuple[str, int, str]],
+        provider_name: str = "",
+        model_name: str = "",
     ) -> None:
         try:
             url, address = await resolve_local(endpoint)
@@ -325,7 +400,8 @@ class JobManager:
         transport_key = (address, parsed.port or (443 if parsed.scheme == "https" else 80), parsed.path)
         if transport_key in successful_transports:
             return
-        probe = Probe(url, address, budget.service())
+        probe = Probe(url, address, budget.service(), provider=provider_name, model=model_name)
+        calls_before = budget.model_calls
         try:
             finding = await identify(probe, model, self.store.event, self.store.error)
         except ModelUnavailable as exc:
@@ -338,6 +414,9 @@ class JobManager:
             if endpoint not in settings.seed_urls or not settings.seed_urls_are_manual:
                 self.store.event("probe", f"{endpoint}: no usable web response")
                 return
+        if budget.model_calls > calls_before:
+            finding.ai_provider = provider_name
+            finding.ai_model = model_name
         saved, added = self.store.save_finding(finding)
         self.store.event(saved.state, f"{saved.endpoint}: {saved.reason}")
         self.update(added=self.record.added + int(added))

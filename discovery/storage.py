@@ -171,3 +171,18 @@ class Store:
             data["findings"][endpoint] = finding.model_dump()
             atomic_json(self.state_file, data)
             return finding
+
+    def restore_rejected(self, endpoint: str) -> Finding:
+        """Move an accidentally rejected result back to the review queue."""
+        from discovery.models import now
+        with data_lock(self.data_dir):
+            data = self.read()
+            finding = Finding.model_validate(data["findings"][endpoint])
+            if finding.state != "rejected":
+                raise ValueError("Only a rejected service can be restored.")
+            finding.state = "review"
+            finding.reason = "Restored to review by user"
+            finding.updated_at = now()
+            data["findings"][endpoint] = finding.model_dump()
+            atomic_json(self.state_file, data)
+            return finding

@@ -36,7 +36,22 @@ def _is_transient_provider_error(exc: Exception) -> bool:
     if status in {429, 500, 502, 503, 504}:
         return True
     message = str(exc).upper()
-    return any(token in message for token in ("429", "503", "UNAVAILABLE", "RESOURCE_EXHAUSTED"))
+    transient_names = {
+        "APICONNECTIONERROR", "APITIMEOUTERROR", "CONNECTERROR", "CONNECTIONERROR",
+        "READTIMEOUT", "TIMEOUTERROR", "SERVERTIMEOUTERROR",
+    }
+    if type(exc).__name__.upper() in transient_names:
+        return True
+    return any(token in message for token in (
+        "429", "500", "502", "503", "504", "UNAVAILABLE", "RESOURCE_EXHAUSTED",
+        "CONNECTION ERROR", "CONNECTION RESET", "TIMED OUT", "TIMEOUT",
+    ))
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    status = _status_code(exc)
+    message = str(exc).upper()
+    return status in {401, 403} or any(token in message for token in ("UNAUTHENTICATED", "INVALID API KEY", "PERMISSION_DENIED"))
 
 
 def _is_rate_limit(exc: Exception) -> bool:
@@ -93,8 +108,8 @@ class DiscoveryGuard(AgentMiddleware):
             return
         context = {
             "endpoint": self.probe.endpoint,
-            "provider": self.probe.budget.run.settings.provider,
-            "model": self.probe.budget.run.settings.model,
+            "provider": self.probe.provider or self.probe.budget.run.settings.provider,
+            "model": self.probe.model or self.probe.budget.run.settings.model,
         }
         if attempt is not None:
             context["attempt"] = str(attempt)
@@ -126,7 +141,8 @@ class DiscoveryGuard(AgentMiddleware):
         messages = [*([request.system_message] if request.system_message else []), *request.messages]
         chars = self.schema_chars + sum(len(json.dumps(m.content, ensure_ascii=False)) + len(json.dumps(getattr(m, "tool_calls", []))) for m in messages)
         self.probe.budget.model(chars)
-        google_only = {"automatic_function_calling": {"disable": True}} if self.probe.budget.run.settings.provider == "gemini" else {}
+        provider = self.probe.provider or self.probe.budget.run.settings.provider
+        google_only = {"automatic_function_calling": {"disable": True}} if provider == "gemini" else {}
         request = request.override(
             tool_choice="any",
             # LangChain executes tools; Google's separate AFC loop must not.
@@ -152,6 +168,8 @@ class DiscoveryGuard(AgentMiddleware):
                 except Exception as exc:
                     rate_limited = _is_rate_limit(exc)
                     self.log_error("provider-rate-limit" if rate_limited else "provider-error", exc, attempt + 1)
+                    if _is_auth_error(exc):
+                        raise ModelUnavailable("The provider rejected its API credentials or model access.") from None
                     if not _is_transient_provider_error(exc):
                         raise
                     fallback = 60 if rate_limited and attempt == 2 else 2 * (attempt + 1)
@@ -164,8 +182,8 @@ class DiscoveryGuard(AgentMiddleware):
                         if rate_limited:
                             raise ProviderRateLimited(delay) from None
                         raise ModelUnavailable("The provider did not recover within this service's time budget.") from None
-                    if rate_limited:
-                        self.trace("observe", f"Provider rate limit; retrying in {delay:.1f} seconds.")
+                    label = "rate limit" if rate_limited else "temporary connection failure"
+                    self.trace("observe", f"Provider {label}; retry {attempt + 2}/3 in {delay:.1f} seconds.")
                     await cancellable_wait(delay)
         task = asyncio.create_task(call_with_retry())
         try:

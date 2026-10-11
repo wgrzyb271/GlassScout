@@ -3,14 +3,18 @@
 from urllib.parse import urljoin, urlsplit
 
 from discovery.models import EvidenceRef, Proposal
-from discovery.verification import in_title, is_router_name, router_identity, router_names_match, identity, redirects_to
+from discovery.verification import (
+    application_identity, application_names_match, identity, in_title,
+    is_application_name, is_printer_name, is_router_name, redirects_to, router_identity,
+    router_names_match,
+)
 
 
 def product(observation):
     for name in ("Proxmox VE", "AdGuard Home"):
         if in_title(name, observation.title):
             return name
-    return router_identity(observation)
+    return application_identity(observation) or router_identity(observation)
 
 
 def proposal_for(probe):
@@ -22,12 +26,17 @@ def proposal_for(probe):
     name = product(panel)
     supporting = [o for o in probe.observations if o.url != panel.url and not o.error
                   and ((200 <= o.status < 300
-                        and (identity(o) == name or router_names_match(name, router_identity(o))))
+                        and (identity(o) == name
+                             or router_names_match(name, router_identity(o))
+                             or application_names_match(name, application_identity(o))))
                        or (200 <= o.status < 400 and is_router_name(name)
                            and redirects_to(o, panel.url)))]
     refs = [EvidenceRef(observation_id=o.id, quote=(o.title or o.text)[:240])
             for o in [panel, *supporting[:4]] if len(o.title or o.text) >= 2]
-    return Proposal(name=name, url=panel.url, evidence=refs)
+    category = "NETWORK PRINTER" if is_printer_name(name) else "DISCOVERED SERVICE"
+    description = ("Discovered printer administration page on the local network."
+                   if is_printer_name(name) else "Discovered on the local network.")
+    return Proposal(name=name, category=category, description=description, url=panel.url, evidence=refs)
 
 
 async def enrich(probe, event):
@@ -53,11 +62,12 @@ async def enrich(probe, event):
         if rendered is not None:
             current = rendered
     name = product(current)
-    if name in {"Proxmox VE", "AdGuard Home"}:
-        path = "/api2/json/version" if name == "Proxmox VE" else "/control/status"
+    if name in {"Proxmox VE", "AdGuard Home", "Jellyfin"}:
+        path = {"Proxmox VE": "/api2/json/version", "AdGuard Home": "/control/status",
+                "Jellyfin": "/System/Info/Public"}[name]
         if probe.budget.tool_calls < probe.budget.run.settings.tool_calls - 3:
             await probe.fetch(urljoin(probe.endpoint, path))
-    elif name:
+    elif name and (is_router_name(name) or is_application_name(name)):
         # Static firmware resources provide a second independent URL without
         # inventing API paths or trying authenticated settings endpoints.
         assets = [u for u in current.links if urlsplit(u).path.lower().endswith((".js", ".css", ".json"))]

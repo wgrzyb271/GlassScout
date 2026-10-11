@@ -7,7 +7,7 @@ The discovery agent is an optional background job. The dashboard remains usable 
 | `discovery/models.py` | Pydantic contracts, local range and URL validation |
 | `discovery/network.py` | Active IPv4 interfaces, DNS-SD hints, cancellable Nmap TCP scan |
 | `discovery/probe.py` | Pinned-IP HTTP transport, same-origin scope, bounded reads, redaction |
-| `discovery/provider.py` | Standard LangChain Gemini model configuration |
+| `discovery/provider.py` | Standard LangChain Gemini and Groq model configuration |
 | `discovery/prompts.py` | Explicit Reason → Act → Observe → Finish instructions |
 | `discovery/tools.py` | `@tool` functions with Pydantic argument schemas |
 | `discovery/agent.py` | `create_agent` construction, `ainvoke` and finding extraction |
@@ -76,7 +76,7 @@ The warning recommending `AsyncChat.send_message` instead of `AsyncModels.genera
 
 ## Budgets
 
-Defaults are 6 model calls, 10 HTTP requests and 90 seconds per service; 60 model calls, 600,000 input characters, 64 endpoint candidates and 10 minutes per run. Each model response has a 2048-token output cap. Input characters are an application budget, not an estimate of Google's billable tokens. Provider retries are disabled; a provider failure saves evidence and pauses the run. Schema failures and repeated actions stop after two steps without progress. Two HTTP requests are reserved for fresh verification.
+Defaults are 6 model calls, 10 HTTP requests and 90 seconds per service; 60 model calls, 600,000 input characters, 64 endpoint candidates and 10 minutes per bounded run. Each model response has a 2048-token output cap. Input characters are an application budget, not an estimate of billable tokens. Temporary connection failures and 5xx responses are retried with bounded backoff. Provider-supplied reset delays are honored; full scans wait without discarding their queue. If both Groq and Gemini credentials are configured, failure after retry switches to the other provider and records the model used. Authentication failures do not spin in a tight retry loop. Schema failures and repeated actions stop after two steps without progress. Two HTTP requests are reserved for fresh verification.
 
 Requests read at most 64 KiB and keep at most 6000 characters of extracted text. Socket timeouts and a request deadline bound slow responses. Cancellation is checked between steps and while reading. An in-flight local request may take up to its remaining timeout to exit; Nmap is terminated separately.
 
@@ -127,10 +127,13 @@ requests are reserved for verification; complex pages may remain unverified.
 
 Nmap `-sV --version-light` is selectable. Only high-confidence, actively probed
 non-web protocol matches are excluded; conventional port labels are not evidence.
-`RunRecord.pending_urls` preserves the current and remaining candidates when
-identification stops. Resume uses those URLs with the dialog's current settings,
-without another TCP scan. Credentials are never stored in the queue. Retry
-attempts count toward both model-call and input budgets.
+`RunRecord.pending_urls` and `pending_port_ranges` preserve both workers' unfinished
+work. **Resume all unfinished work** continues the saved AI queue and remaining TCP
+batches together, retaining the unbounded behavior of an interrupted full scan.
+Starting a replacement scan requires a separate acknowledgement. Credentials are
+never stored in the queue. Retry attempts count toward both model-call and input
+budgets. Rejected findings remain visible in a separate list and can be restored to
+review without deleting discovery history.
 
 Optional browser integration test (requires installed Playwright and Chromium):
 

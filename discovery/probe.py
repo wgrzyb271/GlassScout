@@ -125,14 +125,17 @@ async def resolve_local(url: str) -> tuple[str, str]:
 
 
 class Probe:
-    def __init__(self, endpoint: str, address: str, budget: ServiceBudget):
+    def __init__(self, endpoint: str, address: str, budget: ServiceBudget, *, provider: str = "", model: str = ""):
         self.endpoint, self.address, self.budget = clean_url(endpoint), address, budget
+        self.provider, self.model = provider, model
         self.cache: dict[str, Observation] = {}
         self.observations: list[Observation] = []
         self.allowed = {self.endpoint}
         self.redirects: dict[str, list[str]] = {}
         # Protocol-specific read-only probes complement open-ended link discovery.
-        self.allowed.update(urljoin(self.endpoint, p) for p in ("/api2/json/version", "/control/status", "/manifest.json", "/api/info"))
+        self.allowed.update(urljoin(self.endpoint, p) for p in (
+            "/api2/json/version", "/control/status", "/System/Info/Public", "/manifest.json", "/api/info",
+        ))
 
     def validate(self, value: str) -> str:
         url = clean_url(value)
@@ -238,11 +241,15 @@ class Probe:
                 info = document.get("data", document)
                 if not isinstance(info, dict):
                     info = document
-                obs.product = redact(str(info.get("product") or info.get("application") or info.get("name") or ""))[:100]
-                obs.version = redact(str(info.get("version", "")))[:60]
-                obs.instance_id = redact(str(info.get("instance_id", "")))[:100]
-                keys = ("product", "application", "name", "version", "release", "repoid", "dns_addresses", "dns_port", "protection_enabled", "running", "language")
-                public = {k: info[k] for k in keys if k in info}
+                normalized = {str(key).casefold(): value for key, value in info.items()}
+                obs.product = redact(str(normalized.get("product") or normalized.get("application")
+                                         or normalized.get("productname") or normalized.get("name") or ""))[:100]
+                obs.version = redact(str(normalized.get("version", "")))[:60]
+                obs.instance_id = redact(str(normalized.get("instance_id") or normalized.get("id") or ""))[:100]
+                keys = ("product", "application", "productname", "name", "version", "release", "repoid",
+                        "dns_addresses", "dns_port",
+                        "protection_enabled", "running", "language")
+                public = {k: normalized[k] for k in keys if k in normalized}
                 # Redact nested values too before persistence or model input.
                 serialized = redact(json.dumps(public, ensure_ascii=False))
                 try:

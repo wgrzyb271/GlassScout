@@ -82,6 +82,64 @@ class EnrichmentTests(unittest.TestCase):
         self.assertEqual(model.histories, [])
         self.assertEqual(len(finding.observations), 4)
 
+    def test_jellyfin_verified_from_public_system_info_without_ai(self):
+        routes = {
+            '/': (200, 'text/html', '<title>Jellyfin</title>', {}),
+            '/System/Info/Public': (
+                200, 'application/json',
+                '{"ProductName":"Jellyfin Server","Version":"10.10.7",'
+                '"Id":"server-01","ServerName":"Media"}', {},
+            ),
+        }
+        with responses(routes):
+            model = ScriptedModel(mode='unavailable')
+            finding = asyncio.run(identify(make_probe('http://127.0.0.1/'), model, lambda *_: None))
+        self.assertEqual(finding.state, 'verified')
+        self.assertEqual(finding.proposal.name, 'Jellyfin')
+        self.assertEqual(model.histories, [])
+        identity = next(o for o in finding.observations if o.url.endswith('/System/Info/Public'))
+        self.assertEqual(identity.product, 'Jellyfin Server')
+        self.assertEqual(identity.version, '10.10.7')
+
+    def test_synology_dsm_verified_from_separate_static_resource_without_ai(self):
+        routes = {
+            '/': (302, 'text/html', '', {'location': '/webman/'}),
+            '/webman/': (
+                200, 'text/html',
+                '<title>Synology DiskStation</title><script src="/webman/dsm.js"></script>', {},
+            ),
+            '/webman/dsm.js': (
+                200, 'application/javascript', 'window.SYNO.SDS = { product: "DiskStation Manager" };', {},
+            ),
+        }
+        with responses(routes):
+            model = ScriptedModel(mode='unavailable')
+            finding = asyncio.run(identify(make_probe('http://127.0.0.1/'), model, lambda *_: None))
+        self.assertEqual(finding.state, 'verified')
+        self.assertEqual(finding.proposal.name, 'Synology DSM')
+        self.assertEqual(finding.proposal.url, 'http://127.0.0.1/webman/')
+        self.assertEqual(model.histories, [])
+
+    def test_printer_admin_page_verified_from_separate_vendor_resource(self):
+        routes = {
+            '/': (
+                200, 'text/html',
+                '<title>HP Embedded Web Server</title><script src="/hp-device.js"></script>', {},
+            ),
+            '/hp-device.js': (
+                200, 'application/javascript',
+                'window.deviceName = "HP Embedded Web Server";', {},
+            ),
+        }
+        with responses(routes):
+            finding = asyncio.run(identify(
+                make_probe('http://127.0.0.1/'),
+                ScriptedModel(mode='unavailable'), lambda *_: None,
+            ))
+        self.assertEqual(finding.state, 'verified')
+        self.assertEqual(finding.proposal.name, 'HP Printer')
+        self.assertEqual(finding.proposal.category, 'NETWORK PRINTER')
+
     def test_router_redirect_and_separate_script_can_verify(self):
         routes = {
             '/': (200, 'text/html', '<script>location.href="/login.html";</script>', {}),

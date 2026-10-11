@@ -198,6 +198,37 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("Provider rate limit", output)
         self.assertNotIn("private-org", output)
 
+    def test_api_connection_error_waits_and_retries(self):
+        class APIConnectionError(Exception):
+            pass
+
+        class Request:
+            system_message = None
+            messages = []
+            model_settings = {}
+
+            def override(self, **values):
+                self.model_settings = values.get("model_settings", self.model_settings)
+                return self
+
+        async def exercise():
+            events = []
+            guard = DiscoveryGuard(make_probe("http://127.0.0.1/"), [], lambda *event: events.append(event))
+            calls = 0
+
+            async def handler(_request):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise APIConnectionError("Connection error; try again in 0.01s")
+                return "accepted"
+
+            return await guard.awrap_model_call(Request(), handler), calls, events
+
+        result, calls, events = asyncio.run(exercise())
+        self.assertEqual((result, calls), ("accepted", 2))
+        self.assertTrue(any("temporary connection failure" in message for _, message in events))
+
     def test_unlimited_run_has_no_aggregate_model_or_input_cutoff(self):
         budget = Budget(Settings(
             seed_urls=["http://127.0.0.1/"], unlimited_run=True,
@@ -574,6 +605,17 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(saved.state, "rejected")
             self.assertFalse(added)
 
+    def test_rejected_finding_can_be_restored_to_review(self):
+        with TemporaryDirectory() as directory:
+            store = Store(Path(directory))
+            finding = self.finding()
+            finding.state = "review"
+            store.save_finding(finding)
+            store.review(finding.endpoint, approve=False)
+            restored = store.restore_rejected(finding.endpoint)
+            self.assertEqual(restored.state, "review")
+            self.assertEqual(restored.reason, "Restored to review by user")
+
     def test_manual_correction_renames_an_existing_card(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -843,13 +885,58 @@ class ScannerTests(unittest.TestCase):
                 networks=["127.0.0.1/32"], ports="1-2048", mdns=False,
                 unlimited_run=True,
             ), "", model=ScriptedModel())
+            deadline = time.monotonic() + 5
+            while job.snapshot().scan_batches_completed < 2 and time.monotonic() < deadline:
+                time.sleep(.01)
+            job.stop()
             job.thread.join(5)
 
         self.assertFalse(job.running)
-        self.assertEqual(job.snapshot().status, "partial")
+        self.assertEqual(job.snapshot().status, "stopped")
         self.assertEqual(scanned, ["1-1024", "1025-2048"])
         self.assertEqual(job.snapshot().pending_port_ranges, [])
         self.assertEqual(job.snapshot().scan_batches_completed, 2)
+
+    def test_provider_failure_uses_configured_fallback(self):
+        with TemporaryDirectory() as directory, fixture() as url, patch(
+            "discovery.runner.create_model",
+            side_effect=[ScriptedModel(mode="unavailable"), ScriptedModel()],
+        ):
+            job = JobManager(Path(directory))
+            job.start(Settings(
+                seed_urls=[url], provider="groq", model="primary-model",
+                fallback_provider="gemini", fallback_model="fallback-model",
+            ), "primary-key", fallback_api_key="fallback-key")
+            job.thread.join(5)
+            self.assertFalse(job.running)
+            self.assertEqual(job.snapshot().status, "completed")
+            self.assertEqual(job.snapshot().fallback_count, 1)
+            self.assertEqual(job.snapshot().active_ai_provider, "gemini")
+            finding = next(iter(job.store.read()["findings"].values()))
+            self.assertEqual((finding["ai_provider"], finding["ai_model"]), ("gemini", "fallback-model"))
+
+    def test_full_scan_honors_provider_wait_before_fallback(self):
+        attempts = []
+
+        async def identify(_endpoint, _settings, _budget, _model, _transports, provider, _model_name):
+            attempts.append(provider)
+            if provider == "groq":
+                raise ProviderRateLimited(.01)
+
+        with TemporaryDirectory() as directory, patch(
+            "discovery.runner.create_model", side_effect=[Mock(), Mock()]
+        ), patch.object(JobManager, "_identify_endpoint", side_effect=identify):
+            job = JobManager(Path(directory))
+            job.start(Settings(
+                seed_urls=["http://127.0.0.1:48765/"], unlimited_run=True,
+                provider="groq", model="primary-model",
+                fallback_provider="gemini", fallback_model="fallback-model",
+            ), "primary-key", fallback_api_key="fallback-key")
+            job.thread.join(5)
+
+            self.assertFalse(job.running)
+            self.assertEqual(job.snapshot().status, "completed")
+            self.assertEqual(attempts, ["groq", "groq", "gemini"])
 
     def test_cancel_keeps_completed_hosts_and_terminates_process(self):
         budget = Budget(Settings(networks=["192.168.1.0/24"]), Event())

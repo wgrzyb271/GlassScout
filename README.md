@@ -164,9 +164,10 @@ findings, and activity events without deleting service cards.
 
 Before using AI, the scanner follows up to three observed same-origin HTTP,
 HTML meta-refresh or literal JavaScript redirects. It reads page metadata,
-login-page links and identifying response headers. Proxmox VE, AdGuard Home
-and common router firmware signatures can be recognized locally when the
-evidence agrees. Titles that explicitly identify an unknown router, gateway or
+login-page links and identifying response headers. Proxmox VE, AdGuard Home,
+Jellyfin, Synology DSM, common self-hosted apps, router firmware and printer
+administration pages can be recognized locally when independent resources agree.
+Titles that explicitly identify an unknown router, gateway or
 firewall vendor are also considered. Automatic addition still requires a
 second resource or an observed redirect and a fresh verification; no scanner
 can guarantee identification of every router or authenticated panel.
